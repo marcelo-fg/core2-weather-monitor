@@ -770,6 +770,111 @@ def voice_ask(query, context):
     return resp
 
 
+# =============================================================================
+# [8b] SPEECH-TO-TEXT (microphone → Google STT via middleware)
+# =============================================================================
+
+# Core2 built-in microphone wiring (I2S):
+#   SCK → GPIO 12    WS (LRCK) → GPIO 0    SD (data) → GPIO 34
+_MIC_SCK = 12
+_MIC_WS  = 0
+_MIC_SD  = 34
+
+_STT_SAMPLE_RATE = 16000   # Hz — Google STT recommends 16 kHz
+_STT_DURATION_S  = 3       # seconds to record per query
+
+
+def _mic_record_b64():
+    """
+    Record _STT_DURATION_S seconds from the Core2 built-in mic via I2S.
+    Returns a base64-encoded string of raw LINEAR16 PCM audio, or None on error.
+    Memory note: 3s × 16000 Hz × 2 bytes = 96 KB raw; freed before returning.
+    """
+    import gc
+    import ubinascii
+    try:
+        import machine
+        i2s = machine.I2S(
+            0,
+            sck=machine.Pin(_MIC_SCK),
+            ws=machine.Pin(_MIC_WS),
+            sd=machine.Pin(_MIC_SD),
+            mode=machine.I2S.RX,
+            bits=16,
+            format=machine.I2S.MONO,
+            rate=_STT_SAMPLE_RATE,
+            ibuf=4096,
+        )
+        buf_size  = _STT_DURATION_S * _STT_SAMPLE_RATE * 2  # 16-bit = 2 bytes/sample
+        audio_buf = bytearray(buf_size)
+        i2s.readinto(audio_buf)   # blocks until buffer is full
+        i2s.deinit()
+        b64 = ubinascii.b2a_base64(audio_buf).decode("utf-8").strip()
+        del audio_buf
+        gc.collect()
+        return b64
+    except Exception as e:
+        print("[stt] mic error:", e)
+        return None
+
+
+def voice_listen_and_ask(context):
+    """
+    Full STT → LLM → TTS cycle, triggered by Button B.
+
+    1. Record _STT_DURATION_S s from the built-in mic
+    2. POST audio to middleware /api/voice/stt
+    3. Middleware: Google STT → Gemini → TTS audio cached
+    4. Device plays cached audio via playCloudWAV
+    """
+    # Recording indicator
+    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
+    lcd.font(FONT_SMALL)
+    lcd.print("Enregistrement {}s...".format(_STT_DURATION_S), 5, 195, COL_RED)
+
+    audio_b64 = _mic_record_b64()
+
+    if audio_b64 is None:
+        lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
+        lcd.print("Micro non disponible.", 5, 195, COL_RED)
+        utime.sleep(2)
+        return
+
+    # Processing indicator
+    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
+    lcd.print("Traitement...", 5, 195, COL_CYAN)
+
+    resp = _voice_post("/api/voice/stt", {
+        "audio":       audio_b64,
+        "language":    "fr-FR",
+        "sample_rate": _STT_SAMPLE_RATE,
+        "context":     context,
+    })
+
+    if resp is None:
+        lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
+        lcd.print("Erreur reseau STT.", 5, 195, COL_RED)
+        utime.sleep(2)
+        return
+
+    transcript = resp.get("transcript", "")
+    answer_txt = resp.get("answer", "")
+    audio_id   = resp.get("audio_id")
+
+    if not transcript:
+        lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
+        lcd.print("Pas compris, reessayez.", 5, 195, COL_YELLOW)
+        utime.sleep(2)
+        return
+
+    # Show transcript briefly, then speak the answer
+    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
+    lcd.font(FONT_TINY)
+    lcd.print("Vous: " + transcript[:42], 5, 192, COL_WHITE)
+    utime.sleep_ms(800)
+    voice_speak(answer_txt, audio_id)
+
+
 def build_announcement(data, forecast):
     """Build a TTS announcement for when motion is detected."""
     parts = []
@@ -908,19 +1013,13 @@ def build_display_data(indoor, weather, history, time_now,
 
 
 def run_voice_qa(indoor, weather, history, time_now):
-    screen_show_loading("Thinking...")
-    # Note: True STT on UIFlow requires native C modules for I2S microphone recording.
-    # Here we trigger an intelligent contextual summary using Gemini LLM.
-    resp = voice_ask("", build_display_data(indoor, weather, history, time_now))
-    if resp:
-        ans = resp.get("answer")
-        audio_id = resp.get("audio_id")
-        if ans:
-            screen_show_loading("Speaking...")
-            voice_speak(ans, audio_id)
-            screen_show_loading("Done")
-    else:
-        screen_show_error("Could not get an answer.")
+    """
+    Button B handler (non-WiFi pages):
+    Triggers the full Speech-to-Text → Gemini → TTS pipeline.
+    The user has _STT_DURATION_S seconds to speak their question.
+    """
+    context = build_display_data(indoor, weather, history, time_now)
+    voice_listen_and_ask(context)
 
 
 def main():

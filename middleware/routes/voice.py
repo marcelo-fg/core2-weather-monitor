@@ -1,10 +1,11 @@
 """
-Voice routes — Google TTS and Gemini LLM Q&A endpoints.
+Voice routes — Google TTS, Google STT, and Gemini LLM Q&A endpoints.
 """
 import uuid
 from flask import Blueprint, request, jsonify, Response
 from services.tts_service import synthesize_b64, synthesize
 from services.llm_service import answer, generate_announcement
+from services.stt_service import transcribe_audio
 
 voice_bp = Blueprint("voice", __name__)
 
@@ -75,6 +76,57 @@ def voice_query():
         _audio_cache[audio_id] = audio_bytes
 
     return jsonify({"status": "ok", "answer": response_text, "audio_id": audio_id}), 200
+
+
+@voice_bp.route("/api/voice/stt", methods=["POST"])
+def speech_to_text():
+    """
+    Convert raw audio to text using Google Cloud STT, then answer via Gemini.
+    Request body: {
+        "audio":       "<base64 LINEAR16 PCM>",
+        "language":    "fr-FR",         # optional, default fr-FR
+        "sample_rate": 16000,           # optional, default 16000
+        "context":     {...}            # optional sensor context for LLM
+    }
+    Response: {
+        "status":    "ok",
+        "transcript": "<recognised text>",
+        "answer":    "<LLM response>",
+        "audio_id":  "<cache id for /api/voice/tts.wav?id=..."
+    }
+    """
+    data        = request.get_json(force=True, silent=True) or {}
+    audio_b64   = data.get("audio", "").strip()
+    language    = data.get("language", "fr-FR")
+    sample_rate = int(data.get("sample_rate", 16000))
+    context     = data.get("context", {})
+
+    if not audio_b64:
+        return jsonify({"status": "error", "message": "No audio data provided"}), 400
+
+    # 1. Speech → Text
+    transcript = transcribe_audio(audio_b64, language, sample_rate)
+    if not transcript:
+        return jsonify({"status": "ok", "transcript": "", "answer": "", "audio_id": None}), 200
+
+    # 2. Text → Gemini LLM
+    response_text = answer(transcript, context)
+    if response_text is None:
+        return jsonify({"status": "error", "message": "LLM unavailable"}), 500
+
+    # 3. Cache TTS audio
+    audio_bytes = synthesize(response_text)
+    audio_id = None
+    if audio_bytes:
+        audio_id = str(uuid.uuid4())[:8]
+        _audio_cache[audio_id] = audio_bytes
+
+    return jsonify({
+        "status":     "ok",
+        "transcript": transcript,
+        "answer":     response_text,
+        "audio_id":   audio_id,
+    }), 200
 
 
 @voice_bp.route("/api/voice/announce", methods=["POST"])
