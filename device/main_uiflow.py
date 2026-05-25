@@ -202,15 +202,14 @@ def ntp_sync():
     except Exception as e:
         lcd.print("ntptime: " + str(e)[:29], lcd.CENTER, 185, COL_RED)
 
-    # ── Method 4: OpenWeatherMap (bulletproof HTTP fallback) ─────────────────
-    lcd.print("4) OpenWeatherMap API...", lcd.CENTER, 200, COL_GRAY)
+    # ── Method 4: Middleware Time API (bulletproof fallback) ─────────────────
+    lcd.print("4) Middleware API...", lcd.CENTER, 200, COL_GRAY)
     try:
-        # Re-use the existing HTTP OWM call, grab the 'dt' field
-        url = "http://api.openweathermap.org/data/2.5/weather?q={}&appid={}".format(LOCATION, OPENWEATHER_API_KEY)
+        url = MIDDLEWARE_URL + "/api/time"
         r = urequests.get(url)
         data = ujson.loads(r.content)
         r.close()
-        unix_t = data.get("dt", 0)
+        unix_t = data.get("unixtime", 0)
         if unix_t > 1600000000:
             mp_t = unix_t - 946684800
             t = utime.localtime(mp_t)
@@ -222,12 +221,12 @@ def ntp_sync():
                 rtc.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
             utime.sleep_ms(300)
             if utime.localtime()[0] > 2020:
-                lcd.print("OWM Time OK!", lcd.CENTER, 215, COL_GREEN)
+                lcd.print("Middleware Time OK!", lcd.CENTER, 215, COL_GREEN)
                 utime.sleep(1)
                 return True
-        lcd.print("OWM Time: bad data", lcd.CENTER, 215, COL_YELLOW)
+        lcd.print("Middleware Time: bad data", lcd.CENTER, 215, COL_YELLOW)
     except Exception as e:
-        lcd.print("OWM err: " + str(e)[:24], lcd.CENTER, 215, COL_RED)
+        lcd.print("Middleware err: " + str(e)[:24], lcd.CENTER, 215, COL_RED)
 
     utime.sleep(2)
     return False
@@ -944,6 +943,50 @@ def voice_speak(text):
     except Exception as e:
         print("[voice] TTS Error", e)
 
+def _post_audio_stream(url, filepath):
+    import socket, ussl, os, ujson
+    if not url.startswith("https://"): raise ValueError("HTTPS only")
+    url_no_proto = url[8:]
+    slash_idx = url_no_proto.find("/")
+    host = url_no_proto[:slash_idx] if slash_idx != -1 else url_no_proto
+    path = url_no_proto[slash_idx:] if slash_idx != -1 else "/"
+    file_size = os.stat(filepath)[6]
+    
+    addr = socket.getaddrinfo(host, 443)[0][-1]
+    s = socket.socket()
+    s.settimeout(30)
+    s.connect(addr)
+    s = ussl.wrap_socket(s, server_hostname=host)
+    
+    s.write(f"POST {path} HTTP/1.1\r\n".encode("utf-8"))
+    s.write(f"Host: {host}\r\n".encode("utf-8"))
+    s.write(b"Content-Type: audio/wav\r\n")
+    s.write(f"Content-Length: {file_size}\r\n".encode("utf-8"))
+    s.write(b"Connection: close\r\n\r\n")
+    
+    with open(filepath, "rb") as f:
+        while True:
+            chunk = f.read(2048)
+            if not chunk: break
+            s.write(chunk)
+            
+    resp = b""
+    while True:
+        try:
+            chunk = s.read(1024)
+            if not chunk: break
+            resp += chunk
+        except Exception as e:
+            print("Read timeout or error:", e)
+            break
+    s.close()
+    
+    try:
+        body = resp.split(b"\r\n\r\n", 1)[1]
+        return ujson.loads(body)
+    except:
+        return {"error": "Invalid JSON/HTTP response: " + str(resp[:30])}
+
 def voice_listen_flow(data_dict):
     global page
     page = 4
@@ -957,10 +1000,7 @@ def voice_listen_flow(data_dict):
     
     try:
         import gc; gc.collect()
-        with open(FICHIER_VOIX, "rb") as f: audio_data = f.read()
-        r = urequests.post(MIDDLEWARE_URL + "/api/voice/listen", data=audio_data, headers={"Content-Type": "audio/wav"})
-        resp = ujson.loads(r.content)
-        r.close()
+        resp = _post_audio_stream(MIDDLEWARE_URL + "/api/voice/listen", FICHIER_VOIX)
         
         if resp.get("status") == "ok":
             answer = resp.get("answer", "")
