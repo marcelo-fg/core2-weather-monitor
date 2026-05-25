@@ -1043,11 +1043,20 @@ def main():
                 for c in cmds:
                     ctype = c.get("type")
                     cval  = c.get("value")
+                    
                     if ctype == "set_page":
-                        page = int(cval)
+                        try:
+                            s_val = str(cval).lower()
+                            if "home" in s_val: page = 0
+                            elif "weather" in s_val or "forecast" in s_val: page = 1
+                            elif "history" in s_val: page = 2
+                            elif "settings" in s_val or "wifi" in s_val: page = 3
+                            else: page = int(cval)
+                        except: pass
                         if page == 2:
                             history = cloud_get_history()
                         last_display = 0 # force redraw
+                        
                     elif ctype == "set_brightness":
                         try:
                             import axp
@@ -1057,6 +1066,48 @@ def main():
                         try:
                             speaker.setVolume(int(cval))
                         except: pass
+                        
+                    elif ctype == "settings":
+                        s_val = str(cval).lower()
+                        if s_val.startswith("b="):
+                            try:
+                                import axp
+                                axp.setLcdBrightness(int(s_val.split("=")[1]))
+                            except: pass
+                        elif s_val.startswith("v="):
+                            try:
+                                speaker.setVolume(int(s_val.split("=")[1]))
+                            except: pass
+                            
+                    elif ctype == "btn":
+                        b = str(cval).lower()
+                        if b == "a":
+                            if page == 3 and wifi_networks:
+                                wifi_selected = (wifi_selected - 1) % len(wifi_networks)
+                            elif page > 0:
+                                page -= 1
+                                if page == 2:
+                                    history = cloud_get_history()
+                        elif b == "c":
+                            if page == 3 and wifi_networks:
+                                wifi_selected = (wifi_selected + 1) % len(wifi_networks)
+                            elif page < NUM_PAGES - 1:
+                                page += 1
+                                if page == 2:
+                                    history = cloud_get_history()
+                                if page == 3:
+                                    wifi_networks = wifi_scan()
+                                    wifi_selected = 0
+                        elif b == "b":
+                            if page == 3 and wifi_networks:
+                                net  = wifi_networks[wifi_selected]
+                                ssid = net["ssid"]
+                                screen_show_loading("Connecting to {}...".format(ssid[:20]))
+                                ok = wifi_connect(ssid, "")
+                                if ok:
+                                    wifi_networks = []
+                        last_display = 0 # force redraw
+
                     elif ctype == "play_audio":
                         lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
                         lcd.font(FONT_SMALL)

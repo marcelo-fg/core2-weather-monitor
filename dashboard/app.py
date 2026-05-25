@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.graph_objects as go
 import datetime
@@ -540,67 +541,164 @@ if st.session_state.page == "main":
 elif st.session_state.page == "remote":
     col_back, col_title = st.columns([1, 6])
     with col_back:
+        st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
         if st.button("← Back", use_container_width=True):
             st.session_state.page = "main"
             st.rerun()
     with col_title:
-        st.markdown("<div class='greeting-header'>REMOTE DEVICE CONTROL</div>", unsafe_allow_html=True)
+        st.markdown("<div class='greeting-header' style='margin-top: 0;'>REMOTE DEVICE CONTROL</div>", unsafe_allow_html=True)
 
-    col_left, col_right = st.columns([1, 1])
+    col_bright, col_device, col_vol, col_right = st.columns([1.5, 6, 1.5, 9], gap="small")
 
-    with col_left:
-        # --- DISPLAY PAGE SELECTION BENTO ---
-        with st.container(border=True):
-            st.markdown("<div class='section-title'>ACTIVE DISPLAY PAGE</div>", unsafe_allow_html=True)
+    col_bright, col_device, col_vol, col_right = st.columns([1.5, 5, 1.5, 10], gap="small")
+
+    # --- M5STACK CORE 2 & SLIDERS CSS ---
+    st.markdown("""
+    <style>
+    /* 1) Outer M5Stack Core2 Wrapper */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-outer):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-outer))) {
+        background-color: #2b2b2b !important;
+        border: 2px solid #1a1a1a !important;
+        border-radius: 20px !important;
+        padding: 20px 20px 60px 20px !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+        position: relative !important; /* For absolute positioning of bottom buttons */
+        margin: 0 auto !important;
+        max-width: 400px !important;
+    }
+
+    /* 2) Inner Screen Wrapper */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-screen):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-screen))) {
+        background-color: #111 !important;
+        border: 4px solid #000 !important;
+        border-radius: 10px !important;
+        min-height: 250px !important;
+        padding: 10px !important;
+        margin-bottom: 0 !important;
+    }
+
+    /* 3) Nav Pill Wrapper */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) {
+        border: 2px solid #444 !important;
+        border-radius: 15px !important;
+        padding: 4px !important;
+        margin-bottom: 100px !important; /* Empty space below nav on screen */
+        background-color: rgba(255,255,255,0.05) !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) button {
+        background-color: transparent !important;
+        border: none !important;
+        padding: 5px !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) button p {
+        color: #ddd !important;
+        font-size: 0.6rem !important;
+        font-weight: bold !important;
+        white-space: nowrap !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) button:hover p {
+        color: #3b82f6 !important;
+    }
+
+    /* 4) Bottom Red Circles (A, B, C) */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) {
+        border: none !important;
+        background-color: transparent !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        position: absolute !important;
+        bottom: 15px !important;
+        left: 0 !important;
+        right: 0 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) button {
+        background-color: transparent !important;
+        border: 2px solid #e74c3c !important; /* Red Core2 circles */
+        border-radius: 50% !important;
+        height: 35px !important;
+        width: 35px !important;
+        min-height: 35px !important;
+        padding: 0 !important;
+        margin: 0 auto !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: all 0.2s !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) button:hover {
+        background-color: rgba(231, 76, 60, 0.2) !important;
+        box-shadow: 0 0 10px rgba(231, 76, 60, 0.5) !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) button p {
+        color: transparent !important; /* Hide the text, it's just a red circle */
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        justify-content: center !important;
+        gap: 30px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # --- TOP ROW: HORIZONTAL SLIDERS ---
+    col_b, col_v = st.columns(2, gap="large")
+    with col_b:
+        brightness = st.slider("☀️ Brightness", 0, 100, 80, key="b_slide")
+        if st.button("Apply Brightness", key="apply_b"):
+            post_device_command("settings", f"b={brightness}")
+            st.toast("Brightness updated")
             
-            p_col1, p_col2 = st.columns(2)
-            with p_col1:
-                with st.container(border=True):
-                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>🏠</div>", unsafe_allow_html=True)
-                    if st.button("Home Dashboard", use_container_width=True, key="btn_home"):
-                        success = post_device_command("set_page", "page=home")
-                        st.success("Sent!") if success else st.error("Failed")
-                
-                with st.container(border=True):
-                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>⛅</div>", unsafe_allow_html=True)
-                    if st.button("Weather Forecast", use_container_width=True, key="btn_weather"):
-                        success = post_device_command("set_page", "page=weather")
-                        st.success("Sent!") if success else st.error("Failed")
+    with col_v:
+        volume = st.slider("🔊 Volume", 0, 100, 50, key="v_slide")
+        if st.button("Apply Volume", key="apply_v"):
+            post_device_command("settings", f"v={volume}")
+            st.toast("Volume updated")
 
-            with p_col2:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
+    # --- MAIN LAYOUT ---
+    col_device, col_right = st.columns([1, 1], gap="large")
+
+    with col_device:
+        # --- M5STACK CORE 2 REPLICA ---
+        with st.container(border=True):
+            st.markdown("<div id='m5-outer'></div>", unsafe_allow_html=True)
+            
+            # The Screen
+            with st.container(border=True):
+                st.markdown("<div id='m5-screen'></div>", unsafe_allow_html=True)
+                
+                # Screen Top Nav
                 with st.container(border=True):
-                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>📊</div>", unsafe_allow_html=True)
-                    if st.button("Telemetry", use_container_width=True, key="btn_telemetry"):
-                        success = post_device_command("set_page", "page=telemetry")
-                        st.success("Sent!") if success else st.error("Failed")
+                    st.markdown("<div id='m5-nav'></div>", unsafe_allow_html=True)
+                    nav1, nav2, nav3, nav4 = st.columns(4)
+                    with nav1:
+                        if st.button("HOME", use_container_width=True, key="btn_home"): 
+                            post_device_command("set_page", "page=home")
+                    with nav2:
+                        if st.button("FORECAST", use_container_width=True, key="btn_weather"): 
+                            post_device_command("set_page", "page=weather")
+                    with nav3:
+                        if st.button("HISTORY", use_container_width=True, key="btn_history"): 
+                            post_device_command("set_page", "page=history")
+                    with nav4:
+                        if st.button("SETTINGS", use_container_width=True, key="btn_settings"): 
+                            post_device_command("set_page", "page=settings")
                         
-                with st.container(border=True):
-                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>⚙️</div>", unsafe_allow_html=True)
-                    if st.button("System Settings", use_container_width=True, key="btn_settings"):
-                        success = post_device_command("set_page", "page=settings")
-                        st.success("Sent!") if success else st.error("Failed")
-
-        # --- AUDIO & BRIGHTNESS BENTO ---
-        with st.container(border=True):
-            st.markdown("<div class='section-title'>DISPLAY & AUDIO SETTINGS</div>", unsafe_allow_html=True)
-            col_b, col_v = st.columns(2)
-            with col_b:
-                brightness = st.slider("Brightness", 0, 100, 80)
-            with col_v:
-                volume = st.slider("Volume", 0, 100, 50)
-                
-            if st.button("Apply Settings", use_container_width=True, type="primary", key="btn_settings_apply"):
-                success = post_device_command("settings", f"b={brightness}&v={volume}")
-                st.success("Settings applied to device.") if success else st.error("Failed to send command.")
-
-        # --- WI-FI BENTO ---
-        with st.container(border=True):
-            st.markdown("<div class='section-title'>NETWORK CONFIGURATION</div>", unsafe_allow_html=True)
-            ssid = st.text_input("Wi-Fi SSID", placeholder="Enter Network Name")
-            pwd = st.text_input("Wi-Fi Password", type="password", placeholder="Enter Password")
-            if st.button("Connect to Wi-Fi", use_container_width=True):
-                success = post_device_command("wifi", f"ssid={ssid}&pwd={pwd}")
-                st.success(f"Connecting device to {ssid}...") if success else st.error("Failed.")
+            # The 3 Red Capacitive Touch Buttons (A, B, C)
+            with st.container(border=True):
+                st.markdown("<div id='m5-bottom'></div>", unsafe_allow_html=True)
+                btn1, btn2, btn3 = st.columns(3)
+            with btn1:
+                if st.button("A", key="btn_a"): 
+                    post_device_command("btn", "a")
+            with btn2:
+                if st.button("B", key="btn_b"): 
+                    post_device_command("btn", "b")
+            with btn3:
+                if st.button("C", key="btn_c"): 
+                    post_device_command("btn", "c")
 
     with col_right:
         # --- DIAGNOSTICS BENTO ---
@@ -613,48 +711,47 @@ elif st.session_state.page == "remote":
                 try:
                     last_dt = pd.to_datetime(last_ts, utc=True)
                     now_utc = datetime.datetime.now(datetime.timezone.utc)
-                    is_online = (now_utc - last_dt).total_seconds() < 120
+                    is_online = (now_utc - last_dt).total_seconds() < 360
                 except:
                     pass
 
             status_color = "#22c55e" if is_online else "#ef4444"
             status_text = "ONLINE" if is_online else "OFFLINE"
-            status_icon = "✅" if is_online else "❌"
-
-            env_temp_ok = "✅" if latest.get('temperature') is not None else "⚠️"
-            env_press_ok = "✅" if weather_data else "⚠️" 
-            sgp_ok = "✅" if latest.get('tvoc') is not None else "⚠️"
+            
+            env_temp_ok = "OK" if latest.get('temperature') is not None else "FAIL"
+            env_press_ok = "OK" if weather_data else "FAIL" 
+            sgp_ok = "OK" if latest.get('tvoc') is not None else "FAIL"
             
             html_diagnostics = f"""
             <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
-                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">📡 Main Connectivity</h4>
+                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">MAIN CONNECTIVITY</h4>
                 <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
                     <span style="font-weight: 600; color: #555;">Device Power</span>
-                    <span style="font-weight: 800; color: {status_color};">{status_icon} {status_text}</span>
+                    <span style="font-weight: 800; color: {status_color};">{status_text}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
                     <span style="font-weight: 600; color: #555;">Cloud Backend Sync</span>
-                    <span style="font-weight: 800; color: #22c55e;">✅ CONNECTED</span>
+                    <span style="font-weight: 800; color: #22c55e;">CONNECTED</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; padding: 5px 0;">
                     <span style="font-weight: 600; color: #555;">Middleware Server</span>
-                    <span style="font-weight: 800; color: #22c55e;">✅ CONNECTED</span>
+                    <span style="font-weight: 800; color: #22c55e;">CONNECTED</span>
                 </div>
             </div>
 
             <div style="background: #f8f9fa; border-radius: 8px; padding: 15px;">
-                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">🌡️ Sensors Health</h4>
+                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">SENSORS HEALTH</h4>
                 <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
                     <span style="font-weight: 600; color: #555;">ENV III (Temp/Hum)</span>
-                    <span style="font-weight: 800; color: #555;">{env_temp_ok} OK</span>
+                    <span style="font-weight: 800; color: #555;">{env_temp_ok}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
                     <span style="font-weight: 600; color: #555;">ENV III (Pressure)</span>
-                    <span style="font-weight: 800; color: #555;">{env_press_ok} OK</span>
+                    <span style="font-weight: 800; color: #555;">{env_press_ok}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; padding: 5px 0;">
                     <span style="font-weight: 600; color: #555;">SGP30 (TVOC/eCO2)</span>
-                    <span style="font-weight: 800; color: #555;">{sgp_ok} OK</span>
+                    <span style="font-weight: 800; color: #555;">{sgp_ok}</span>
                 </div>
             </div>
             """

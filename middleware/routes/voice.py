@@ -1,15 +1,19 @@
 """
 Voice routes — Google TTS, Google STT, and Gemini LLM Q&A endpoints.
+Integrates the tts-module-main robust logic.
 """
 import uuid
+import base64
 from flask import Blueprint, request, jsonify, Response
-from services.tts_service import synthesize_b64, synthesize
-from services.llm_service import answer, generate_announcement
-from services.stt_service import transcribe_audio
+
+# Import the newly copied tts module logic
+from tts import service
+from tts import announcements
+from tts import stt
+from tts import llm
 
 voice_bp = Blueprint("voice", __name__)
 
-_audio_cache = {}
 _device_command_queue = []
 
 @voice_bp.route("/api/device/sync", methods=["GET"])
@@ -34,227 +38,84 @@ def device_command():
 
 @voice_bp.route("/api/voice/tts.wav", methods=["GET"])
 def tts_wav():
-    """Stream raw WAV audio for the M5Stack playCloudWAV function."""
-    audio_id = request.args.get("id")
-    if audio_id and audio_id in _audio_cache:
-        return Response(_audio_cache[audio_id], mimetype="audio/wav")
-        
+    """Stream raw WAV audio (used by cache or direct text)."""
     text = request.args.get("text", "").strip()
     if not text:
-        return "No text or id", 400
+        return "No text", 400
         
-    audio_bytes = synthesize(text)
-    if not audio_bytes:
-        return "TTS failed", 500
-        
-    return Response(audio_bytes, mimetype="audio/wav")
-
-
-@voice_bp.route("/api/voice/tts", methods=["POST"])
-def tts():
-    """
-    Convert text to speech using Google Cloud TTS.
-    Request body: {"text": "Hello world"}
-    Response: {"status": "ok", "audio_b64": "<base64 WAV>"}
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    text = data.get("text", "").strip()
-
-    if not text:
-        return jsonify({"status": "error", "message": "No text provided"}), 400
-
-    audio_b64 = synthesize_b64(text)
-    if audio_b64 is None:
-        return jsonify({"status": "error", "message": "TTS failed"}), 500
-
-    return jsonify({"status": "ok", "audio_b64": audio_b64}), 200
-
-
-@voice_bp.route("/api/voice/query", methods=["POST"])
-def voice_query():
-    """
-    Answer a natural language question using Gemini with sensor context.
-    Request body: {"query": "What is the temperature?", "context": {...}}
-    Response: {"status": "ok", "answer": "The temperature is 22.5°C.", "audio_id": "..."}
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    query   = data.get("query", "").strip()
-    context = data.get("context", {})
-
-    if not query:
-        response_text = generate_announcement(context)
-    else:
-        response_text = answer(query, context)
-
-    if response_text is None:
-        return jsonify({"status": "error", "message": "LLM unavailable"}), 500
-
-    # Cache audio to avoid URL length limits on the ESP32
-    audio_bytes = synthesize(response_text)
-    audio_id = None
-    if audio_bytes:
-        audio_id = str(uuid.uuid4())[:8]
-        _audio_cache[audio_id] = audio_bytes
-
-    return jsonify({"status": "ok", "answer": response_text, "audio_id": audio_id}), 200
-
-
-@voice_bp.route("/api/voice/stt", methods=["POST"])
-def speech_to_text():
-    """
-    Convert raw audio to text using Google Cloud STT, then answer via Gemini.
-    Request body: {
-        "audio":       "<base64 LINEAR16 PCM>",
-        "language":    "fr-FR",         # optional, default fr-FR
-        "sample_rate": 16000,           # optional, default 16000
-        "context":     {...}            # optional sensor context for LLM
-    }
-    Response: {
-        "status":    "ok",
-        "transcript": "<recognised text>",
-        "answer":    "<LLM response>",
-        "audio_id":  "<cache id for /api/voice/tts.wav?id=..."
-    }
-    """
-    data        = request.get_json(force=True, silent=True) or {}
-    audio_b64   = data.get("audio", "").strip()
-    language    = data.get("language", "fr-FR")
-    sample_rate = int(data.get("sample_rate", 16000))
-    context     = data.get("context", {})
-
-    if not audio_b64:
-        return jsonify({"status": "error", "message": "No audio data provided"}), 400
-
-    # 1. Speech → Text
-    transcript = transcribe_audio(audio_b64, language, sample_rate)
-    if not transcript:
-        return jsonify({"status": "ok", "transcript": "", "answer": "", "audio_id": None}), 200
-
-    # 2. Text → Gemini LLM
-    response_text = answer(transcript, context)
-    if response_text is None:
-        return jsonify({"status": "error", "message": "LLM unavailable"}), 500
-
-    # 3. Cache TTS audio
-    audio_bytes = synthesize(response_text)
-    audio_id = None
-    if audio_bytes:
-        audio_id = str(uuid.uuid4())[:8]
-        _audio_cache[audio_id] = audio_bytes
-
-    return jsonify({
-        "status":     "ok",
-        "transcript": transcript,
-        "answer":     response_text,
-        "audio_id":   audio_id,
-    }), 200
-
-@voice_bp.route("/api/voice/stt_raw", methods=["POST"])
-def speech_to_text_raw():
-    """
-    Convert raw binary audio to text. Avoids JSON encoding on IoT device.
-    """
-    audio_bytes = request.data
-    if not audio_bytes:
-        return jsonify({"status": "error", "message": "No audio data provided"}), 400
-
-    import base64
-    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-    
-    # Check if audio is completely silent (all zeros)
-    is_silent = all(b == 0 for b in audio_bytes)
-    print(f"[STT_RAW] Received {len(audio_bytes)} bytes. Is silent? {is_silent}")
-    
-    transcript = transcribe_audio(audio_b64, "fr-FR", 16000)
-    print(f"[STT_RAW] Google Speech-to-Text returned: '{transcript}'")
-    
-    if not transcript:
-        return jsonify({"status": "ok", "transcript": "", "answer": "", "audio_id": None}), 200
-
-    # Minimal context for now
-    response_text = answer(transcript, {})
-    if response_text is None:
-        return jsonify({"status": "error", "message": "LLM unavailable"}), 500
-
-    audio_tts_bytes = synthesize(response_text)
-    audio_id = None
-    if audio_tts_bytes:
-        import uuid
-        audio_id = str(uuid.uuid4())[:8]
-        _audio_cache[audio_id] = audio_tts_bytes
-
-    return jsonify({
-        "status":     "ok",
-        "transcript": transcript,
-        "answer":     response_text,
-        "audio_id":   audio_id,
-    }), 200
-
+    try:
+        audio_bytes = service.get_audio(text)
+        return Response(audio_bytes, mimetype="audio/wav")
+    except Exception as e:
+        return str(e), 503
 
 @voice_bp.route("/api/voice/announce", methods=["POST"])
 def announce():
     """
-    Generate a proactive announcement (used on motion detection).
-    Request body: {"context": {...}}
-    Response: {"status": "ok", "text": "...", "audio_b64": "..."}
-    The device can optionally use audio_b64 or generate its own TTS from the text.
+    Generate a proactive announcement.
+    If 'force' is False, applies rate-limiting.
+    Returns JSON with text and audio_b64.
     """
-    data    = request.get_json(force=True, silent=True) or {}
-    context = data.get("context", {})
+    data = request.get_json(silent=True) or {}
+    event_type = data.get("event_type", "welcome")
+    force = bool(data.get("force", False))
 
-    text = generate_announcement(context)
+    if not force and announcements.is_rate_limited(event_type):
+        return jsonify({"error": f"Annonce '{event_type}' déjà émise récemment."}), 429
 
-    # Optionally include TTS audio
-    include_audio = data.get("include_audio", False)
-    audio_b64 = None
-    if include_audio:
-        audio_b64 = synthesize_b64(text)
+    try:
+        text = announcements.build_announcement_text(event_type)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
-    result = {"status": "ok", "text": text}
-    if audio_b64:
-        result["audio_b64"] = audio_b64
+    try:
+        audio_bytes = service.get_audio(text)
+    except Exception as e:
+        return jsonify({"error": f"Service TTS indisponible: {e}"}), 503
 
-    return jsonify(result), 200
-
-@voice_bp.route("/api/voice/stt_only", methods=["POST"])
-def stt_only():
-    """Reads raw WAV from request, returns only the transcript (for Dashboard 2-step flow)."""
-    audio_bytes = request.data
-    if not audio_bytes:
-        return jsonify({"status": "error", "message": "No audio"}), 400
-        
-    import base64
-    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-    
-    transcript = transcribe_audio(audio_b64, "fr-FR", 16000)
-    return jsonify({"status": "ok", "transcript": transcript or ""}), 200
-
-@voice_bp.route("/api/voice/process_text_to_device", methods=["POST"])
-def process_text_to_device():
-    """Takes user text, gets LLM response, generates TTS, and queues it for the M5Stack."""
-    global _device_command_queue
-    data = request.get_json(force=True, silent=True) or {}
-    text = data.get("text", "").strip()
-    context = data.get("context", {})
-    
-    if not text:
-        return jsonify({"status": "error", "message": "No text"}), 400
-        
-    response_text = answer(text, context)
-    if response_text is None:
-        return jsonify({"status": "error", "message": "LLM failed"}), 500
-        
-    audio_tts_bytes = synthesize(response_text)
-    audio_id = None
-    if audio_tts_bytes:
-        import uuid
-        audio_id = str(uuid.uuid4())[:8]
-        _audio_cache[audio_id] = audio_tts_bytes
-        _device_command_queue.append({"type": "play_audio", "value": response_text})
-        print(f"[PROCESS] Queued play_audio for M5Stack.")
+    announcements.mark_announced(event_type)
 
     return jsonify({
         "status": "ok",
-        "answer": response_text,
-        "audio_id": audio_id
+        "text": text
     }), 200
+
+@voice_bp.route("/api/voice/listen", methods=["POST"])
+def listen():
+    """
+    Conversation mode: receives audio, returns JSON with transcript, answer, and audio_b64.
+    """
+    if "audio" in request.files:
+        audio_bytes = request.files["audio"].read()
+    else:
+        audio_bytes = request.get_data()
+
+    if not audio_bytes:
+        return jsonify({"error": "Aucun audio reçu."}), 400
+
+    try:
+        transcription = stt.transcribe_wav(audio_bytes)
+    except Exception as e:
+        return jsonify({"error": f"Service de transcription indisponible: {e}"}), 503
+
+    if not transcription:
+        # Fallback if no voice was detected
+        reponse_texte = "Désolé, je n'ai pas bien compris. Pouvez-vous répéter ?"
+        transcription = "..."
+    else:
+        try:
+            reponse_texte = llm.generate_reply(transcription)
+        except Exception as e:
+            return jsonify({"error": f"Service LLM indisponible: {e}"}), 503
+
+    try:
+        audio_reponse = service.get_audio(reponse_texte)
+    except Exception as e:
+        return jsonify({"error": f"Service TTS indisponible: {e}"}), 503
+
+    return jsonify({
+        "status": "ok",
+        "transcript": transcription,
+        "answer": reponse_texte
+    }), 200
+

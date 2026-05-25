@@ -39,6 +39,12 @@ import unit
 WIFI_SSID     = "YOUR_WIFI_SSID"  # change to "iot-unil" for in-class demo
 WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 WIFI_TIMEOUT  = 30  # seconds
+IS_ONLINE     = False
+KNOWN_NETWORKS = [
+    (WIFI_SSID, WIFI_PASSWORD),
+    ("iPhone", "12345678"),
+    ("M5-Config", "12345678")
+]
 
 # Location
 LOCATION        = "Lausanne,CH"
@@ -136,6 +142,13 @@ def ntp_sync():
         lcd.print("Clock already OK", lcd.CENTER, 110, COL_GREEN)
         utime.sleep(1)
         return True
+
+    import network
+    if not network.WLAN(network.STA_IF).isconnected():
+        lcd.font(FONT_TINY)
+        lcd.print("Offline: Skipping time sync", lcd.CENTER, 130, COL_YELLOW)
+        utime.sleep(1)
+        return False
 
     # ── Method 1: UIFlow native ntp (targeted import, no API key issue) ───────
     lcd.font(FONT_TINY)
@@ -317,7 +330,7 @@ def motion_detected():
 
 # =============================================================================
 
-NUM_PAGES = 4  # 0=Home, 1=Forecast, 2=History, 3=Settings
+NUM_PAGES = 5  # 0=Home, 1=Forecast, 2=History, 3=Settings, 4=Voice
 
 _screen_alerts = []
 
@@ -363,6 +376,16 @@ def _draw_nav_bar(page):
             lcd.font(FONT_TINY)
             lcd.print(label, x, 10, COL_WHITE)
         x += 75
+        
+    # Online/Offline LED indicator (M5Go side bars)
+    try:
+        from m5stack import rgb
+        if IS_ONLINE:
+            rgb.setColorAll(0x001100) # Dim green
+        else:
+            rgb.setColorAll(0x110000) # Dim red
+    except Exception:
+        pass
 
 def _draw_alerts():
     if not _screen_alerts:
@@ -572,7 +595,52 @@ def _page_settings(data):
     lcd.print("WiFi Connected: " + data.get("wifi_ssid", "?"), 15, 65, COL_GREEN)
     lcd.print("Middleware: " + ("OK" if data.get("weather") else "ERROR"), 15, 95, COL_GREEN if data.get("weather") else COL_RED)
     
+    # WiFi Switcher UI
+    lcd.rect(50, 130, 220, 40, COL_BLUE, COL_BG)
+    lcd.font(FONT_SMALL)
+    lcd.print("SWITCH WIFI", 100, 140, COL_WHITE)
+    
+    lcd.font(FONT_TINY)
     lcd.print("[A] Volume-  [B] Mic Test  [C] Volume+", 25, 200, COL_GRAY)
+
+def _page_voice(data):
+    lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
+    lcd.font(FONT_TINY)
+    lcd.print("VOICE ASSISTANT", 15, 42, COL_BLUE)
+    lcd.line(10, 55, 310, 55, COL_BLUE)
+    
+    voice_state = data.get("voice_state", "ready")
+    transcript = data.get("transcript", "")
+    answer = data.get("answer", "")
+    
+    if voice_state == "done":
+        lcd.font(FONT_SMALL)
+        if transcript:
+            tr = str(transcript)
+            lcd.print("Vous: " + tr[:35], 15, 70, COL_WHITE)
+            if len(tr) > 35: lcd.print(tr[35:70], 15, 90, COL_WHITE)
+        if answer:
+            ans = str(answer)
+            lcd.print("Robot: " + ans[:35], 15, 120, COL_GREEN)
+            if len(ans) > 35: lcd.print(ans[35:70], 15, 140, COL_GREEN)
+            if len(ans) > 70: lcd.print(ans[70:105], 15, 160, COL_GREEN)
+            if len(ans) > 105: lcd.print(ans[105:140], 15, 180, COL_GREEN)
+            if len(ans) > 140: lcd.print(ans[140:175], 15, 200, COL_GREEN)
+    else:
+        # Show robot at the bottom center
+        try:
+            lcd.image(120, 140, "res/robot_big.jpg")
+        except: pass
+        
+        # Speech bubble
+        lcd.roundrect(60, 70, 200, 40, 10, COL_WHITE, COL_WHITE)
+        lcd.triangle(150, 110, 170, 110, 160, 125, COL_WHITE, COL_WHITE)
+        
+        lcd.font(FONT_SMALL)
+        if voice_state == "listening":
+            lcd.print("Je vous ecoute...", 75, 80, COL_BG)
+        elif voice_state == "thinking":
+            lcd.print("Je reflechis...", 85, 80, COL_BG)
 
 def _page_standby(data, full=True):
     t = data.get("time", {})
@@ -623,6 +691,8 @@ def screen_render(page, data, is_standby=False, full_refresh=True):
         _page_history(data)
     elif page == 3:
         _page_settings(data)
+    elif page == 4:
+        _page_voice(data)
 
 
 
@@ -750,27 +820,41 @@ _HEADERS = {"Content-Type": "application/json"}
 
 
 def _cloud_post(path, payload):
+    global IS_ONLINE
+    import network
+    if not network.WLAN(network.STA_IF).isconnected():
+        IS_ONLINE = False
+        return None
     try:
         url  = MIDDLEWARE_URL + path
         body = ujson.dumps(payload)
         r    = urequests.post(url, data=body, headers=_HEADERS)
         resp = ujson.loads(r.content)
         r.close()
+        IS_ONLINE = True
         return resp
     except Exception as e:
         print("[cloud] POST {} failed: {}".format(path, e))
+        IS_ONLINE = False
         return None
 
 
 def _cloud_get(path):
+    global IS_ONLINE
+    import network
+    if not network.WLAN(network.STA_IF).isconnected():
+        IS_ONLINE = False
+        return None
     try:
         url  = MIDDLEWARE_URL + path
         r    = urequests.get(url, headers=_HEADERS)
         resp = ujson.loads(r.content)
         r.close()
+        IS_ONLINE = True
         return resp
     except Exception as e:
         print("[cloud] GET {} failed: {}".format(path, e))
+        IS_ONLINE = False
         return None
 
 
@@ -807,91 +891,108 @@ try:
 except Exception:
     print("[voice] speaker not available")
 
+FICHIER_VOIX = "/flash/voix.wav"
+FICHIER_REPONSE = "/flash/reponse.wav"
+DUREE_ENREGISTREMENT_S = 5
 
-def _voice_post(path, payload):
-    import gc
-    gc.collect()
-    r = None
+def preparer_audio():
     try:
-        r = urequests.post(
-            MIDDLEWARE_URL + path,
-            data=ujson.dumps(payload),
-            headers=_HEADERS
-        )
-        data = ujson.loads(r.content)
-        r.close()
-        return data
-    except Exception as e:
-        print("[voice] request failed:", e)
-        if r is not None:
-            try:
-                r.close()
-            except: pass
-        return {"_internal_error": str(e)}
+        import power
+        power.setSpkEnable(True)
+    except: pass
+    try:
+        speaker.setVolume(100)
+    except: pass
 
+def enregistrer_voix(chemin):
+    try: speaker.end()
+    except: pass
+    mic = globals().get("Mic") or globals().get("mic")
+    if mic is None:
+        try: import mic
+        except: pass
+    try: mic.record2file(DUREE_ENREGISTREMENT_S, chemin)
+    except Exception as e: print("[voice] record error", e)
+
+def jouer_wav(chemin):
+    utime.sleep_ms(500)
+    try: speaker.begin()
+    except: pass
+    preparer_audio()
+    try: speaker.playWAV(chemin, volume=100)
+    except Exception as e: print("[voice] playWAV error", e)
 
 def _urlencode(s):
     res = ""
     for c in s:
-        if c.isalpha() or c.isdigit() or c in "-_.~":
-            res += c
-        elif c == " ":
-            res += "%20"
+        if c.isalpha() or c.isdigit() or c in "-_.~": res += c
+        elif c == " ": res += "%20"
         else:
             h = hex(ord(c))[2:]
             if len(h) == 1: h = "0" + h
             res += "%" + h.upper()
     return res
 
+def voice_speak(text):
+    if not text: return
+    try:
+        preparer_audio()
+        import gc; gc.collect()
+        url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(text[:150])
+        speaker.playCloudWAV(url)
+        utime.sleep_ms(500)
+    except Exception as e:
+        print("[voice] TTS Error", e)
 
-def voice_speak(text, audio_id=None):
-    """Call Cloud Run TTS and stream audio via playCloudWAV."""
-    if not text:
-        return
-    print("[voice] TTS:", text[:60])
+def voice_listen_flow(data_dict):
+    global page
+    page = 4
+    data_dict["voice_state"] = "listening"
+    screen_render(page, data_dict, False, True)
     
-    # Show text on screen to verify what it's saying
-    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-    lcd.font(FONT_TINY)
-    lcd.print(text[:45], 5, 195, COL_CYAN)
+    enregistrer_voix(FICHIER_VOIX)
+    
+    data_dict["voice_state"] = "thinking"
+    screen_render(page, data_dict, False, True)
     
     try:
-        # On ignore le audio_id car le cache Cloud Run est volatil et provoque une
-        # erreur 400 (HTML) qui fait crasher (freeze) playCloudWAV.
-        # On force la synthèse à la volée du texte (raccourci pour éviter les URL trop longues).
-        url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(text[:150])
+        import gc; gc.collect()
+        with open(FICHIER_VOIX, "rb") as f: audio_data = f.read()
+        r = urequests.post(MIDDLEWARE_URL + "/api/voice/listen", data=audio_data, headers={"Content-Type": "audio/wav"})
+        resp = ujson.loads(r.content)
+        r.close()
         
-        try:
-            import power
-            power.setSpkEnable(True)
-        except: pass
-        
-        try: 
-            import machine
-            speaker.setVolume(100) # Volume maximum
-        except: pass
-        
-        import gc
-        gc.collect() # Libere la RAM avant streaming audio
-        
-        # Play directly from the cloud
-        speaker.playCloudWAV(url)
-        
-        utime.sleep_ms(500)
-        gc.collect() # Libere la RAM apres streaming
-        
+        if resp.get("status") == "ok":
+            answer = resp.get("answer", "")
+            data_dict["voice_state"] = "done"
+            data_dict["transcript"] = resp.get("transcript", "")
+            data_dict["answer"] = answer
+            screen_render(page, data_dict, False, True)
+            
+            try:
+                gc.collect()
+                url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(answer[:200])
+                r2 = urequests.get(url)
+                if r2.status_code == 200:
+                    with open(FICHIER_REPONSE, "wb") as f2: f2.write(r2.content)
+                    r2.close()
+                    jouer_wav(FICHIER_REPONSE)
+                else:
+                    r2.close()
+                    voice_speak(answer)
+            except Exception as e:
+                print("DL TTS error:", e)
+                voice_speak(answer)
+        else:
+            data_dict["voice_state"] = "done"
+            data_dict["transcript"] = "Serveur Erreur"
+            data_dict["answer"] = resp.get("error", "Erreur inconnue")
+            screen_render(page, data_dict, False, True)
     except Exception as e:
-        lcd.print("Audio err: " + str(e)[:25], 5, 210, COL_RED)
-        utime.sleep(2)
-        
-    # Clear the text after speaking
-    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-
-
-def voice_ask(query, context):
-    """Send a natural language question + context → get LLM answer."""
-    resp = _voice_post("/api/voice/query", {"query": query, "context": context})
-    return resp
+        data_dict["voice_state"] = "done"
+        data_dict["transcript"] = "Reseau Erreur"
+        data_dict["answer"] = str(e)[:30]
+        screen_render(page, data_dict, False, True)
 
 
 # =============================================================================
@@ -992,6 +1093,21 @@ def wifi_connect(ssid=None, password=None):
     return True
 
 
+def wifi_cycle():
+    """Connect to the next network in KNOWN_NETWORKS."""
+    import network
+    wlan = network.WLAN(network.STA_IF)
+    current = wlan.config("essid") if wlan.isconnected() else ""
+    idx = 0
+    for i, (s, p) in enumerate(KNOWN_NETWORKS):
+        if s == current:
+            idx = (i + 1) % len(KNOWN_NETWORKS)
+            break
+    print("Switching WiFi to:", KNOWN_NETWORKS[idx][0])
+    wlan.disconnect()
+    return wifi_connect(KNOWN_NETWORKS[idx][0], KNOWN_NETWORKS[idx][1])
+
+
 def wifi_scan():
     import network
     wlan = network.WLAN(network.STA_IF)
@@ -1084,7 +1200,7 @@ def main():
         os.mkdir('res')
     except:
         pass
-    for ico in ['clear', 'partly', 'clouds', 'rain', 'storm', 'snow']:
+    for ico in ['clear', 'partly', 'clouds', 'rain', 'storm', 'snow', 'robot']:
         # Download 20x20 icons
         ico_file = ico + ".jpg"
         path = 'res/' + ico + "_v2.jpg"
@@ -1093,10 +1209,12 @@ def main():
         except OSError:
             screen_show_loading("Downloading " + ico)
             try:
-                r = urequests.get(MIDDLEWARE_URL + "/static/icons/" + ico_file)
-                with open(path, 'wb') as f:
-                    f.write(r.content)
-                r.close()
+                import network
+                if network.WLAN(network.STA_IF).isconnected():
+                    r = urequests.get(MIDDLEWARE_URL + "/static/icons/" + ico_file)
+                    with open(path, 'wb') as f:
+                        f.write(r.content)
+                    r.close()
             except: pass
             
         # Download 40x40 icons (big)
@@ -1107,10 +1225,12 @@ def main():
         except OSError:
             screen_show_loading("DL Big " + ico)
             try:
-                r = urequests.get(MIDDLEWARE_URL + "/static/icons/" + ico_big_file)
-                with open(path_big, 'wb') as f:
-                    f.write(r.content)
-                r.close()
+                import network
+                if network.WLAN(network.STA_IF).isconnected():
+                    r = urequests.get(MIDDLEWARE_URL + "/static/icons/" + ico_big_file)
+                    with open(path_big, 'wb') as f:
+                        f.write(r.content)
+                    r.close()
             except: pass
 
     screen_show_loading("Fetching last data...")
@@ -1154,7 +1274,7 @@ def main():
                 screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
             elif btnB.wasPressed():
                 last_interaction = now
-                speaker.tone(1000, 100)
+                voice_listen_flow(build_display_data(indoor, weather, history, ntp_now()))
         except: pass
 
         # Touch handling
@@ -1187,6 +1307,17 @@ def main():
                 screen_render(page, data, is_standby)
                 utime.sleep_ms(300)
             
+            elif ty >= 35 and ty <= 240:
+                # Handle touch in Settings Page to Switch WiFi
+                if page == 3 and tx >= 50 and tx <= 270 and ty >= 130 and ty <= 170:
+                    last_interaction = now
+                    screen_show_loading("Switching WiFi...")
+                    wifi_cycle()
+                    data = build_display_data(indoor, weather, history, ntp_now())
+                    screen_render(page, data, is_standby)
+                    utime.sleep_ms(300)
+                    continue
+
             # M5Stack Core2 Virtual Buttons (Bottom bezel)
             elif ty > 240:
                 if tx < 106:      # Button A
@@ -1194,9 +1325,7 @@ def main():
                 elif tx > 213:    # Button C
                     page = (page + 1) % NUM_PAGES
                 else:             # Button B
-                    try:
-                        speaker.tone(1000, 100)
-                    except: pass
+                    voice_listen_flow(build_display_data(indoor, weather, history, ntp_now()))
                 
                 data = build_display_data(indoor, weather, history, ntp_now())
                 screen_render(page, data, is_standby)
@@ -1264,7 +1393,11 @@ def main():
                 value = cmd.get("value")
                 if action == "set_page":
                     try:
-                        p = int(value)
+                        if isinstance(value, str) and value.startswith("page="):
+                            v = value.split("=")[1]
+                            p = {"home": 0, "weather": 1, "history": 2, "settings": 3}.get(v, 0)
+                        else:
+                            p = int(value)
                         if 0 <= p < NUM_PAGES:
                             page = p
                             screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
@@ -1284,6 +1417,9 @@ def main():
                     except: pass
                 elif action == "play_audio":
                     voice_speak(str(value))
+                elif action == "btn":
+                    if value == "b":
+                        voice_listen_flow(build_display_data(indoor, weather, history, ntp_now()))
             last_poll = now
 
         utime.sleep_ms(20)
