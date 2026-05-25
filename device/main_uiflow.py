@@ -47,9 +47,32 @@ TIMEZONE_OFFSET = 2  # CEST = UTC+2
 # Middleware (Flask API on Google Cloud Run — deployed!)
 MIDDLEWARE_URL = "https://core2-middleware-337108994948.europe-west1.run.app"
 
+def set_screen_brightness(level):
+    """Safely attempts to set screen brightness (0-100) across different M5Stack API versions"""
+    try:
+        # Core2 axp global object
+        axp.setLcdBrightness(level)
+        return
+    except: pass
+    try:
+        # Older core M5Stack
+        power.setLCDBrightness(level)
+        return
+    except: pass
+    try:
+        import axp as _axp
+        _axp.setLcdBrightness(level)
+        return
+    except: pass
+    try:
+        lcd.setBrightness(int(level * 255 / 100))
+        return
+    except: pass
+    
+
 
 # External APIs
-OPENWEATHER_API_KEY = "YOUR_OPENWEATHER_API_KEY_HERE"
+OPENWEATHER_API_KEY = "REMOVED_FOR_SECURITY"
 # Note: Gemini LLM and Google TTS are handled server-side by the middleware.
 
 
@@ -63,24 +86,25 @@ SENSOR_READ_INTERVAL     = 30
 CLOUD_UPLOAD_INTERVAL    = 300    # 5 min
 WEATHER_REFRESH_INTERVAL = 1800   # 30 min
 ANNOUNCE_COOLDOWN        = 3600   # 1 h — motion TTS cooldown
-DISPLAY_TICK             = 5      # screen refresh
+DISPLAY_TICK             = 30     # screen refresh
+CLOCK_TICK               = 1      # clock refresh
 
 # Display dimensions
 SCREEN_W = 320
 SCREEN_H = 240
 
 # Colour palette (RGB565)
-COL_BG     = 0x0d1b2a   # dark navy background
-COL_PANEL  = 0x1b2838   # slightly lighter panel
-COL_WHITE  = 0xFFFFFF
-COL_AMBER  = 0xFF9F00   # temperature
-COL_CYAN   = 0x00D4FF   # humidity
-COL_GREEN  = 0x00E676   # good air quality
-COL_RED    = 0xFF4444   # alerts / bad AQ
 COL_YELLOW = 0xFFEB3B   # warnings
 COL_BLUE   = 0x64B5F6   # outdoor accent
 COL_GRAY   = 0x607D8B   # secondary text
 COL_TOPBAR = 0x1565C0   # top navigation bar
+COL_BG     = 0x000000   # Fond noir
+COL_PANEL  = 0x1b263b
+COL_WHITE  = 0xffffff
+COL_AMBER  = 0xFF9F00   # temperature
+COL_CYAN   = 0x00D4FF   # humidity
+COL_GREEN  = 0x00E676   # good air quality
+COL_RED    = 0xFF4444   # alerts / bad AQ
 
 # Fonts
 FONT_SMALL  = lcd.FONT_DejaVu18
@@ -261,12 +285,19 @@ def sensors_read():
             eco2 = _tvoc.eCO2
         except Exception:
             pass
+    pir_state = False
+    if _pir:
+        try:
+            pir_state = (_pir.state == 1)
+        except Exception:
+            pass
     return {
         "temperature": temp,
         "humidity":    humi,
         "tvoc":        tvoc,
         "eco2":        eco2,
         "aq_label":    _aq_label(tvoc),
+        "pir":         pir_state,
     }
 
 
@@ -279,24 +310,26 @@ def motion_detected():
         return False
 
 
+
+
 # =============================================================================
 # [5] DISPLAY / SCREEN MANAGER
+
 # =============================================================================
 
-NUM_PAGES = 4  # 0=Home, 1=Forecast, 2=History, 3=WiFi
-
-_WEATHER_ICONS = {
-    "Clear": "* ", "Clouds": "~ ", "Rain": "/ ",
-    "Drizzle": "/ ", "Thunderstorm": "! ", "Snow": "+ ",
-    "Mist": "_ ", "Fog": "_ ",
-}
+NUM_PAGES = 4  # 0=Home, 1=Forecast, 2=History, 3=Settings
 
 _screen_alerts = []
 
-
-def _weather_icon(condition):
-    return _WEATHER_ICONS.get(condition, "? ")
-
+def _weather_icon_path(condition, big=False):
+    mapping = {
+        "Clear": "clear", "Clouds": "clouds", "Rain": "rain",
+        "Drizzle": "rain", "Thunderstorm": "storm", "Snow": "snow",
+    }
+    basename = mapping.get(condition, "partly")
+    if big:
+        return "res/" + basename + "_big.jpg"
+    return "res/" + basename + "_v2.jpg"
 
 def _aq_color(label):
     return {
@@ -304,199 +337,283 @@ def _aq_color(label):
         "Poor": COL_AMBER, "Hazardous": COL_RED,
     }.get(label, COL_GRAY)
 
-
 def screen_set_alerts(alerts):
     global _screen_alerts
     _screen_alerts = alerts
-
 
 def screen_show_loading(msg="Loading..."):
     lcd.clear(COL_BG)
     lcd.font(FONT_MEDIUM)
     lcd.print(msg, lcd.CENTER, 100, COL_CYAN)
 
-
 def screen_show_error(msg):
     lcd.font(FONT_SMALL)
     lcd.print(msg[:40], 5, 220, COL_RED)
 
-
 def _draw_nav_bar(page):
-    lcd.rect(0, 0, 320, 28, COL_TOPBAR, COL_TOPBAR)
-    labels = ["Home", "Forecast", "History", "WiFi"]
-    x = 4
+    # Dessin de la Top Bar
+    lcd.rect(10, 5, 300, 24, COL_WHITE, COL_BG) # Contour blanc, fond noir
+    labels = ["HOME", "FORECAST", "HISTORY", "SETTINGS"]
+    x = 18
     for i, label in enumerate(labels):
-        col = COL_WHITE if i == page else COL_GRAY
-        lcd.font(FONT_TINY)
-        lcd.print(label, x, 7, col)
-        x += 80
-    lcd.font(FONT_TINY)
-    lcd.print("[A]<  [B]Voice  >[C]", 60, 228, COL_GRAY)
-
+        if i == page:
+            lcd.font(FONT_TINY)
+            lcd.print(label, x, 10, COL_BLUE)
+        else:
+            lcd.font(FONT_TINY)
+            lcd.print(label, x, 10, COL_WHITE)
+        x += 75
 
 def _draw_alerts():
     if not _screen_alerts:
         return
-    msg = "  |  ".join(_screen_alerts)
-    lcd.rect(0, 210, 320, 18, COL_RED, COL_RED)
+    msg = " | ".join(_screen_alerts)
+    lcd.rect(0, 222, 320, 18, COL_RED, COL_RED)
     lcd.font(FONT_TINY)
-    lcd.print(msg[:52], 4, 213, COL_WHITE)
-
+    lcd.print(msg[:52], 4, 225, COL_WHITE)
 
 def _page_home(data):
-    # Clock strip
-    t = data.get("time", {})
-    clock_str = "{:02d}:{:02d}".format(t.get("h", 0), t.get("m", 0))
-    date_str  = "{} {:02d}/{:02d}/{:04d}".format(
-        t.get("day", ""), t.get("dd", 0), t.get("mo", 0), t.get("yy", 0))
-    lcd.rect(0, 30, 320, 28, COL_PANEL, COL_PANEL)
-    lcd.font(FONT_MEDIUM)
-    lcd.print(clock_str, 8, 33, COL_AMBER)
-    lcd.font(FONT_SMALL)
-    lcd.print(date_str, 100, 38, COL_GRAY)
+    _draw_outdoor_card(data)
+    _draw_indoor_card(data)
+    _draw_alerts()
 
-    # Divider lines
-    lcd.line(0, 60, 320, 60, COL_GRAY)
-    lcd.line(160, 60, 160, 208, COL_GRAY)
-
-    # Outdoor panel (left)
-    weather = data.get("weather", {}).get("current", {})
-    icon    = _weather_icon(weather.get("condition", ""))
-    lcd.font(FONT_TINY)
-    lcd.print("OUTDOOR", 10, 64, COL_BLUE)
-    lcd.font(FONT_LARGE)
-    out_temp = weather.get("temp")
-    lcd.print("{:.0f}C".format(out_temp) if out_temp is not None else "--C",
-              10, 82, COL_AMBER)
-    lcd.font(FONT_SMALL)
-    lcd.print(icon + weather.get("description", "N/A")[:14], 10, 128, COL_WHITE)
-    lcd.font(FONT_TINY)
-    feels = weather.get("feels_like")
-    lcd.print("Feels: {}C".format(int(feels) if feels else "--"), 10, 152, COL_GRAY)
-    wind = weather.get("wind_speed")
-    lcd.print("Wind: {} m/s".format(wind if wind else "--"), 10, 167, COL_GRAY)
-
-    # Indoor panel (right)
+def _draw_indoor_card(data):
     temp = data.get("temperature")
     humi = data.get("humidity")
-    tvoc = data.get("tvoc")
-    aq   = data.get("aq_label", "N/A")
     eco2 = data.get("eco2")
-
-    lcd.font(FONT_TINY)
-    lcd.print("INDOOR", 170, 64, COL_CYAN)
-    lcd.font(FONT_MEDIUM)
-    lcd.print("{:.1f}C".format(temp) if temp is not None else "--C",
-              170, 82, COL_AMBER)
-    lcd.font(FONT_SMALL)
-    lcd.print("~  {:.0f}%".format(humi) if humi is not None else "~  --%",
-              170, 116, COL_CYAN)
+    aq   = data.get("aq_label", "N/A")
     aq_col = _aq_color(aq)
-    lcd.print("Air: " + aq, 170, 142, aq_col)
+    
+    x, y, w, h = 165, 35, 145, 180
+    lcd.rect(x, y, w, h, COL_CYAN, COL_BG) # Contour cyan, fond noir
+    lcd.font(FONT_SMALL)
+    lcd.print("INDOOR", x+15, y+15, COL_CYAN)
+    lcd.font(FONT_LARGE)
+    lcd.print("{:.1f}C".format(temp) if temp is not None else "--C", x+15, y+45, COL_AMBER)
+    lcd.font(FONT_SMALL)
+    lcd.print("{:.0f}% hum".format(humi) if humi is not None else "--%", x+15, y+95, COL_CYAN)
     lcd.font(FONT_TINY)
-    if eco2 is not None:
-        lcd.print("CO2: {} ppm".format(eco2), 170, 165, COL_GRAY)
-    if tvoc is not None:
-        lcd.print("TVOC: {} ppb".format(tvoc), 170, 180, COL_GRAY)
+    lcd.print("{} ppm CO2".format(eco2) if eco2 is not None else "-- ppm", x+15, y+125, COL_WHITE)
+    lcd.print("{} air quality".format(aq), x+15, y+150, aq_col)
 
-    _draw_alerts()
+def _draw_outdoor_card(data):
+    weather = data.get("weather", {}).get("current", {})
+    icon_path = _weather_icon_path(weather.get("condition", ""))
+    temp = weather.get("temp")
+    feels = weather.get("feels_like")
+    humi = weather.get("humidity")
+    wind = weather.get("wind_speed")
+    
+    x, y, w, h = 10, 35, 145, 180
+    lcd.rect(x, y, w, h, COL_AMBER, COL_BG) # Contour orange, fond noir
+    lcd.font(FONT_SMALL)
+    lcd.print("OUTDOOR", x+15, y+15, COL_AMBER)
+    lcd.font(FONT_LARGE)
+    lcd.print("{:.1f}C".format(temp) if temp is not None else "--C", x+15, y+45, COL_AMBER)
+    lcd.font(FONT_TINY)
+    lcd.print("{:.0f}C feels like".format(feels) if feels is not None else "--", x+15, y+95, COL_AMBER)
+    lcd.print("{:.0f}% humidity".format(humi) if humi is not None else "--", x+15, y+120, COL_AMBER)
+    lcd.print("{} m/s wind".format(wind) if wind is not None else "--", x+15, y+145, COL_AMBER)
 
 
 def _page_forecast(data):
-    forecast = data.get("weather", {}).get("forecast", [])
-    lcd.font(FONT_SMALL)
-    lcd.print("5-Day Forecast", lcd.CENTER, 34, COL_WHITE)
-    lcd.line(0, 56, 320, 56, COL_GRAY)
-
-    if not forecast:
+    forecast = data.get("weather", {}).get("forecast", {})
+    if isinstance(forecast, list):
+        # Fallback raw OWM data is a list
+        hourly = []
+        daily = forecast
+    else:
+        hourly = forecast.get("hourly", [])
+        daily = forecast.get("daily", [])
+    
+    # Bloc horaire en haut (hauteur réduite)
+    lcd.rect(10, 35, 300, 65, COL_BLUE, COL_BG)
+    
+    if not hourly:
         lcd.font(FONT_SMALL)
-        lcd.print("No forecast data", lcd.CENTER, 120, COL_GRAY)
-        return
-
-    col_w = 320 // min(5, len(forecast))
-    for i, day in enumerate(forecast[:5]):
-        x = i * col_w + 4
+        lcd.print("No forecast", 100, 60, COL_GRAY)
+    else:
+        for i, h in enumerate(hourly[:6]):
+            x = 15 + (i * 48)
+            lcd.font(FONT_TINY)
+            lcd.print(h.get("time", "?"), x, 40, COL_WHITE)
+            try:
+                # Icon size is 20x20 now
+                lcd.image(x+5, 55, _weather_icon_path(h.get("condition", "")))
+            except: pass
+            lcd.font(FONT_TINY)
+            t = h.get("temp")
+            lcd.print("{}C".format(int(t) if t is not None else "--"), x+5, 82, COL_WHITE)
+        
+    # 5-DAY FORECAST 
+    lcd.rect(10, 105, 300, 134, COL_BLUE, COL_BG)
+    lcd.font(FONT_TINY)
+    lcd.print("5 DAY FORECAST", 15, 110, COL_BLUE)
+    
+    # Calculate global min/max for proportional gauges
+    if daily:
+        g_min = min([d.get("temp_min", 0) for d in daily[:6]])
+        g_max = max([d.get("temp_max", 0) for d in daily[:6]])
+        if g_max == g_min: g_max += 1
+    else:
+        g_min, g_max = 0, 1
+        
+    gauge_x = 140
+    gauge_w = 115
+    
+    y = 125
+    for i, day in enumerate(daily[:6]):
         lcd.font(FONT_TINY)
-        lcd.print(day.get("day_name", "?")[:3].upper(), x, 62, COL_GRAY)
-        lcd.font(FONT_SMALL)
-        lcd.print(_weather_icon(day.get("condition", "")), x, 80, COL_WHITE)
-        lcd.font(FONT_TINY)
-        t_max = day.get("temp_max")
-        lcd.print("{}C".format(int(t_max) if t_max is not None else "--"), x, 108, COL_AMBER)
-        t_min = day.get("temp_min")
-        lcd.print("{}C".format(int(t_min) if t_min is not None else "--"), x, 124, COL_BLUE)
-        rain = day.get("rain_prob", 0)
-        if rain:
-            lcd.print("{}%".format(int(rain * 100)), x, 140, COL_CYAN)
-        if i < 4:
-            lcd.line(x + col_w - 2, 56, x + col_w - 2, 160, COL_PANEL)
+        day_name = day.get("day_name", "?")
+        if i == 0: day_name = "Today"
+        lcd.print(day_name, 15, y+2, COL_WHITE)
+        try:
+            lcd.image(80, y, _weather_icon_path(day.get("condition", "")))
+        except: pass
+        
+        t_min = day.get("temp_min", 0)
+        t_max = day.get("temp_max", 0)
+        lcd.print("{}C".format(int(t_min)), 110, y+2, COL_WHITE)
+        
+        # Piste de fond (Gris foncé)
+        lcd.rect(gauge_x, y+6, gauge_w, 3, COL_PANEL, COL_PANEL)
+        
+        # Segment proportionnel
+        start_px = int((t_min - g_min) / (g_max - g_min) * gauge_w)
+        width_px = int((t_max - t_min) / (g_max - g_min) * gauge_w)
+        if width_px < 2: width_px = 2
+        lcd.rect(gauge_x + start_px, y+6, width_px, 3, COL_AMBER, COL_AMBER)
+        
+        # Si c'est aujourd'hui, point de la temp actuelle
+        if i == 0:
+            curr_t = hourly[0].get("temp", t_min) if hourly else t_min
+            curr_t = max(t_min, min(t_max, curr_t))
+            dot_px = int((curr_t - g_min) / (g_max - g_min) * gauge_w)
+            lcd.circle(gauge_x + dot_px, y+7, 4, COL_WHITE, COL_WHITE)
+            
+        lcd.print("{}C".format(int(t_max)), 265, y+2, COL_WHITE)
+        
+        y += 18
+        if y > 230: break
 
 
 def _page_history(data):
-    history = data.get("history", [])
-    lcd.font(FONT_SMALL)
-    lcd.print("Indoor History", lcd.CENTER, 34, COL_WHITE)
-    lcd.line(0, 56, 320, 56, COL_GRAY)
+    history = data.get("history", {})
+    
+    # 1. Left Panel (Bar Chart)
+    lcd.rect(10, 35, 145, 200, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
-    lcd.print("Time      Temp   Hum    AQ", 6, 60, COL_GRAY)
-    lcd.line(0, 72, 320, 72, COL_PANEL)
+    lcd.print("INDOOR VS OUTDOOR C", 15, 42, COL_WHITE)
+    
+    bars = history.get("bars", [])
+    y = 62
+    max_px = 90
+    max_temp = 30.0
+    
+    for b in bars:
+        lcd.font(FONT_TINY)
+        lcd.print(b.get("day", "")[:3], 15, y+2, COL_WHITE)
+        
+        # Indoor (Orange)
+        t_in = min(max_temp, max(0, b.get("in", 0)))
+        w_in = int((t_in / max_temp) * max_px)
+        if w_in < 2: w_in = 2
+        lcd.rect(48, y, w_in, 8, COL_AMBER, COL_AMBER)
+        
+        # Outdoor (Blue)
+        t_out = min(max_temp, max(0, b.get("out", 0)))
+        w_out = int((t_out / max_temp) * max_px)
+        if w_out < 2: w_out = 2
+        lcd.rect(48, y+9, w_out, 8, COL_BLUE, COL_BLUE)
+        
+        y += 22
 
-    if not history:
-        lcd.font(FONT_SMALL)
-        lcd.print("No history data", lcd.CENTER, 120, COL_GRAY)
+    # Scale numbers at bottom
+    lcd.print("0", 48, 220, COL_GRAY)
+    lcd.print("10", 78, 220, COL_GRAY)
+    lcd.print("20", 108, 220, COL_GRAY)
+    lcd.print("30", 138, 220, COL_GRAY)
+
+    # 2. Top Right Panel (Humidity)
+    lcd.rect(160, 35, 150, 95, COL_BLUE, COL_BG)
+    lcd.print("HUMIDITY LAST WEEK", 165, 42, COL_WHITE)
+    
+    humi = history.get("humidity", 0)
+    cx, cy, r, thick = 235, 85, 30, 10
+    
+    import math
+    lcd.circle(cx, cy, r, COL_WHITE, COL_WHITE)
+    for a in range(0, int((humi / 100) * 360), 2):
+        rad = math.radians(a - 90)
+        x2 = cx + int(math.cos(rad) * (r - thick/2))
+        y2 = cy + int(math.sin(rad) * (r - thick/2))
+        lcd.circle(x2, y2, int(thick/2), COL_BLUE, COL_BLUE)
+    lcd.circle(cx, cy, r - thick, COL_BG, COL_BG)
+    
+    lcd.font(FONT_SMALL)
+    lcd.print("{}%".format(humi), cx - 18, cy - 8, COL_WHITE)
+    
+    # 3. Bottom Right Panel (Alerts)
+    lcd.rect(160, 135, 150, 100, COL_BLUE, COL_BG)
+    lcd.font(FONT_TINY)
+    lcd.print("ALERTS LAST WEEK", 165, 142, COL_WHITE)
+    
+    alerts = history.get("alerts", 0)
+    lcd.font(FONT_LARGE)
+    lcd.print(str(alerts), 225, 165, COL_AMBER)
+
+
+def _page_settings(data):
+    lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
+    lcd.font(FONT_TINY)
+    lcd.print("SETTINGS & STATUS", 15, 42, COL_BLUE)
+    lcd.line(10, 55, 310, 55, COL_BLUE)
+    
+    lcd.print("WiFi Connected: " + data.get("wifi_ssid", "?"), 15, 65, COL_GREEN)
+    lcd.print("Middleware: " + ("OK" if data.get("weather") else "ERROR"), 15, 95, COL_GREEN if data.get("weather") else COL_RED)
+    
+    lcd.print("[A] Volume-  [B] Mic Test  [C] Volume+", 25, 200, COL_GRAY)
+
+def _page_standby(data, full=True):
+    t = data.get("time", {})
+    time_str = "{:02d}:{:02d}".format(t.get("h", 0), t.get("m", 0))
+    
+    if full:
+        # Contour bleu et fond
+        lcd.rect(10, 10, 300, 220, COL_BLUE, COL_BG)
+        
+        mo_names = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        mo = t.get("mo", 1)
+        day_str = "{} {} {}".format(t.get("day", "").upper(), mo_names[mo], t.get("dd", 1))
+        
+        lcd.font(FONT_MEDIUM)
+        lcd.print(day_str, lcd.CENTER, 45, COL_WHITE)
+        
+        lcd.font(FONT_LARGE)
+        lcd.print(time_str, lcd.CENTER, 95, COL_WHITE)
+        
+        icon = data.get("weather", {}).get("current", {}).get("condition", "Clear")
+        try:
+            # 50x50 icon, center is at X=135 (320/2 - 25)
+            lcd.image(135, 155, _weather_icon_path(icon, big=True))
+        except:
+            pass
+    else:
+        # Only update the time area to prevent flickering the image/date
+        lcd.rect(15, 95, 290, 50, COL_BG, COL_BG)
+        lcd.font(FONT_LARGE)
+        lcd.print(time_str, lcd.CENTER, 95, COL_WHITE)
+
+def screen_render(page, data, is_standby=False, full_refresh=True):
+    if is_standby:
+        if full_refresh:
+            lcd.clear(COL_BG)
+        _page_standby(data, full=full_refresh)
         return
 
-    y = 76
-    for row in history[:8]:
-        ts   = row.get("time_label", "--:--")
-        temp = row.get("temperature")
-        humi = row.get("humidity")
-        aq   = row.get("aq_label", "?")[:4]
-        aq_col = _aq_color(row.get("aq_label", ""))
-        line = "{:<9} {:<7} {:<7}".format(
-            ts,
-            "{:.1f}C".format(temp) if temp is not None else "-- C",
-            "{:.0f}%".format(humi) if humi is not None else "--%",
-        )
-        lcd.print(line, 6, y, COL_WHITE)
-        lcd.print(aq, 268, y, aq_col)
-        y += 17
-        if y > 200:
-            break
-
-
-def _page_wifi(data):
-    lcd.font(FONT_SMALL)
-    lcd.print("WiFi Settings", lcd.CENTER, 34, COL_WHITE)
-    lcd.line(0, 56, 320, 56, COL_GRAY)
-    lcd.font(FONT_TINY)
-    lcd.print("Connected: " + data.get("wifi_ssid", WIFI_SSID), 8, 64, COL_GREEN)
-
-    networks = data.get("wifi_networks", [])
-    selected = data.get("wifi_selected", 0)
-    lcd.print("Available networks:", 8, 86, COL_GRAY)
-    lcd.line(0, 98, 320, 98, COL_PANEL)
-
-    if not networks:
-        lcd.print("Scanning...", 8, 108, COL_GRAY)
-    else:
-        y = 104
-        for i, net in enumerate(networks[:6]):
-            prefix = "> " if i == selected else "  "
-            col    = COL_AMBER if i == selected else COL_WHITE
-            rssi   = net.get("rssi", 0)
-            bars   = "|||" if rssi > -60 else ("||" if rssi > -75 else "|")
-            lcd.font(FONT_TINY)
-            lcd.print("{}{:<22} {}".format(prefix, net.get("ssid", "?")[:22], bars),
-                      8, y, col)
-            y += 18
-
-    lcd.font(FONT_TINY)
-    lcd.print("[A] Prev  [B] Connect  [C] Next", 8, 194, COL_GRAY)
-
-
-def screen_render(page, data):
-    lcd.clear(COL_BG)
+    if full_refresh:
+        lcd.clear(COL_BG)
+        
     _draw_nav_bar(page)
     if page == 0:
         _page_home(data)
@@ -505,12 +622,15 @@ def screen_render(page, data):
     elif page == 2:
         _page_history(data)
     elif page == 3:
-        _page_wifi(data)
+        _page_settings(data)
+
 
 
 # =============================================================================
 # [6] WEATHER (OpenWeatherMap)
+
 # =============================================================================
+
 
 _OWM_BASE = "http://api.openweathermap.org/data/2.5"
 
@@ -554,7 +674,7 @@ def _fetch_current_owm():
             "feels_like":  raw["main"]["feels_like"],
             "humidity":    raw["main"]["humidity"],
             "pressure":    raw["main"]["pressure"],
-            "description": raw["weather"][0]["description"].capitalize(),
+            "description": raw["weather"][0]["description"],
             "condition":   raw["weather"][0]["main"],
             "wind_speed":  raw["wind"]["speed"],
             "icon":        raw["weather"][0]["icon"],
@@ -668,12 +788,12 @@ def cloud_get_latest():
     return None
 
 
-def cloud_get_history(hours=24):
-    """Fetch recent readings for the History page."""
-    data = _cloud_get("/api/sensor/history?hours={}".format(hours))
+def cloud_get_history():
+    """Fetch weekly aggregated readings for the History dashboard."""
+    data = _cloud_get("/api/sensor/history_weekly")
     if data and "data" in data:
         return data["data"]
-    return []
+    return {}
 
 
 # =============================================================================
@@ -707,7 +827,7 @@ def _voice_post(path, payload):
             try:
                 r.close()
             except: pass
-        return None
+        return {"_internal_error": str(e)}
 
 
 def _urlencode(s):
@@ -735,27 +855,31 @@ def voice_speak(text, audio_id=None):
     lcd.font(FONT_TINY)
     lcd.print(text[:45], 5, 195, COL_CYAN)
     
-    if not _HW_AVAILABLE:
-        return
-
     try:
-        if audio_id:
-            url = MIDDLEWARE_URL + "/api/voice/tts.wav?id=" + audio_id
-        else:
-            url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(text)
+        # On ignore le audio_id car le cache Cloud Run est volatil et provoque une
+        # erreur 400 (HTML) qui fait crasher (freeze) playCloudWAV.
+        # On force la synthèse à la volée du texte (raccourci pour éviter les URL trop longues).
+        url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(text[:150])
         
         try:
             import power
             power.setSpkEnable(True)
         except: pass
         
-        try: speaker.setVolume(100)
+        try: 
+            import machine
+            speaker.setVolume(100) # Volume maximum
         except: pass
+        
+        import gc
+        gc.collect() # Libere la RAM avant streaming audio
         
         # Play directly from the cloud
         speaker.playCloudWAV(url)
         
         utime.sleep_ms(500)
+        gc.collect() # Libere la RAM apres streaming
+        
     except Exception as e:
         lcd.print("Audio err: " + str(e)[:25], 5, 210, COL_RED)
         utime.sleep(2)
@@ -771,108 +895,18 @@ def voice_ask(query, context):
 
 
 # =============================================================================
-# [8b] SPEECH-TO-TEXT (microphone → Google STT via middleware)
+# [8b] DEVICE POLLING (Remote Control)
 # =============================================================================
 
-# Core2 built-in microphone wiring (I2S):
-#   SCK → GPIO 12    WS (LRCK) → GPIO 0    SD (data) → GPIO 34
-_MIC_SCK = 12
-_MIC_WS  = 0
-_MIC_SD  = 34
-
-_STT_SAMPLE_RATE = 16000   # Hz — Google STT recommends 16 kHz
-_STT_DURATION_S  = 3       # seconds to record per query
-
-
-def _mic_record_b64():
-    """
-    Record _STT_DURATION_S seconds from the Core2 built-in mic via I2S.
-    Returns a base64-encoded string of raw LINEAR16 PCM audio, or None on error.
-    Memory note: 3s × 16000 Hz × 2 bytes = 96 KB raw; freed before returning.
-    """
-    import gc
-    import ubinascii
+def device_poll_sync():
+    """Récupère la file d'attente des commandes depuis la Remote Streamlit."""
     try:
-        import machine
-        i2s = machine.I2S(
-            0,
-            sck=machine.Pin(_MIC_SCK),
-            ws=machine.Pin(_MIC_WS),
-            sd=machine.Pin(_MIC_SD),
-            mode=machine.I2S.RX,
-            bits=16,
-            format=machine.I2S.MONO,
-            rate=_STT_SAMPLE_RATE,
-            ibuf=4096,
-        )
-        buf_size  = _STT_DURATION_S * _STT_SAMPLE_RATE * 2  # 16-bit = 2 bytes/sample
-        audio_buf = bytearray(buf_size)
-        i2s.readinto(audio_buf)   # blocks until buffer is full
-        i2s.deinit()
-        b64 = ubinascii.b2a_base64(audio_buf).decode("utf-8").strip()
-        del audio_buf
-        gc.collect()
-        return b64
+        resp = _cloud_get("/api/device/sync")
+        if resp and resp.get("status") == "ok":
+            return resp.get("commands", [])
     except Exception as e:
-        print("[stt] mic error:", e)
-        return None
-
-
-def voice_listen_and_ask(context):
-    """
-    Full STT → LLM → TTS cycle, triggered by Button B.
-
-    1. Record _STT_DURATION_S s from the built-in mic
-    2. POST audio to middleware /api/voice/stt
-    3. Middleware: Google STT → Gemini → TTS audio cached
-    4. Device plays cached audio via playCloudWAV
-    """
-    # Recording indicator
-    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-    lcd.font(FONT_SMALL)
-    lcd.print("Enregistrement {}s...".format(_STT_DURATION_S), 5, 195, COL_RED)
-
-    audio_b64 = _mic_record_b64()
-
-    if audio_b64 is None:
-        lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-        lcd.print("Micro non disponible.", 5, 195, COL_RED)
-        utime.sleep(2)
-        return
-
-    # Processing indicator
-    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-    lcd.print("Traitement...", 5, 195, COL_CYAN)
-
-    resp = _voice_post("/api/voice/stt", {
-        "audio":       audio_b64,
-        "language":    "fr-FR",
-        "sample_rate": _STT_SAMPLE_RATE,
-        "context":     context,
-    })
-
-    if resp is None:
-        lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-        lcd.print("Erreur reseau STT.", 5, 195, COL_RED)
-        utime.sleep(2)
-        return
-
-    transcript = resp.get("transcript", "")
-    answer_txt = resp.get("answer", "")
-    audio_id   = resp.get("audio_id")
-
-    if not transcript:
-        lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-        lcd.print("Pas compris, reessayez.", 5, 195, COL_YELLOW)
-        utime.sleep(2)
-        return
-
-    # Show transcript briefly, then speak the answer
-    lcd.rect(0, 190, 320, 50, COL_BG, COL_BG)
-    lcd.font(FONT_TINY)
-    lcd.print("Vous: " + transcript[:42], 5, 192, COL_WHITE)
-    utime.sleep_ms(800)
-    voice_speak(answer_txt, audio_id)
+        print("[poll] error:", e)
+    return []
 
 
 def build_announcement(data, forecast):
@@ -1011,15 +1045,13 @@ def build_display_data(indoor, weather, history, time_now,
     data["wifi_selected"] = wifi_selected
     return data
 
-
 def run_voice_qa(indoor, weather, history, time_now):
-    """
-    Button B handler (non-WiFi pages):
-    Triggers the full Speech-to-Text → Gemini → TTS pipeline.
-    The user has _STT_DURATION_S seconds to speak their question.
-    """
-    context = build_display_data(indoor, weather, history, time_now)
-    voice_listen_and_ask(context)
+    ai_context = {
+        "temperature": indoor.get("temperature"),
+        "time": time_now,
+        "outdoor_temp": weather.get("temp")
+    }
+    voice_listen_and_ask(ai_context)
 
 
 def main():
@@ -1028,6 +1060,7 @@ def main():
     sensors_init()
 
     page          = 0
+    home_primary  = "indoor"
     indoor        = {}
     weather       = {}
     history       = []
@@ -1040,29 +1073,160 @@ def main():
     last_upload   = 0
     last_weather  = 0
     last_display  = 0
-    last_announce = utime.ticks_ms()
+    last_poll     = 0
 
     # ── Boot sequence ────────────────────────────────────────────────────────
-    # 1. Try to load last data from BigQuery (fills screen before sensors read)
+    
+    # 0. Download UI assets (self-install)
+    screen_show_loading("Checking UI assets...")
+    import os
+    try:
+        os.mkdir('res')
+    except:
+        pass
+    for ico in ['clear', 'partly', 'clouds', 'rain', 'storm', 'snow']:
+        # Download 20x20 icons
+        ico_file = ico + ".jpg"
+        path = 'res/' + ico + "_v2.jpg"
+        try:
+            os.stat(path)
+        except OSError:
+            screen_show_loading("Downloading " + ico)
+            try:
+                r = urequests.get(MIDDLEWARE_URL + "/static/icons/" + ico_file)
+                with open(path, 'wb') as f:
+                    f.write(r.content)
+                r.close()
+            except: pass
+            
+        # Download 40x40 icons (big)
+        ico_big_file = ico + "_big.jpg"
+        path_big = 'res/' + ico + "_big.jpg"
+        try:
+            os.stat(path_big)
+        except OSError:
+            screen_show_loading("DL Big " + ico)
+            try:
+                r = urequests.get(MIDDLEWARE_URL + "/static/icons/" + ico_big_file)
+                with open(path_big, 'wb') as f:
+                    f.write(r.content)
+                r.close()
+            except: pass
+
     screen_show_loading("Fetching last data...")
     last = cloud_get_latest()
     if last:
         indoor.update(last)
+        if "timestamp" in indoor:
+            del indoor["timestamp"]
 
-    # 2. Fetch weather (also confirms network is up)
     screen_show_loading("Loading weather...")
-    weather = weather_get()
+    weather = weather_get() or {}
 
-    # 3. NTP sync LAST — network is confirmed up after weather call
     screen_show_loading("Syncing clock...")
     ntp_sync()
 
-    # 4. Load history
     history = cloud_get_history()
 
+    # Initial render
+    data = build_display_data(indoor, weather, history, ntp_now())
+    screen_render(page, data)
+
     # ── Main loop ────────────────────────────────────────────────────────────
+    
+    STANDBY_TIMEOUT = 60
+    last_interaction = utime.time()
+    is_standby = False
+    last_pir_state = 0
+    
     while True:
         now = utime.time()
+
+        # Buffered hardware buttons (catches presses even during HTTP blocks)
+        try:
+            if btnA.wasPressed():
+                last_interaction = now
+                page = (page - 1) % NUM_PAGES
+                screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
+            elif btnC.wasPressed():
+                last_interaction = now
+                page = (page + 1) % NUM_PAGES
+                screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
+            elif btnB.wasPressed():
+                last_interaction = now
+                speaker.tone(1000, 100)
+        except: pass
+
+        # Touch handling
+        try:
+            touch_active = touch.status()
+        except:
+            touch_active = False
+            
+        if touch_active:
+            last_interaction = now
+            if is_standby:
+                is_standby = False
+                set_screen_brightness(100)
+                screen_render(page, build_display_data(indoor, weather, history, ntp_now()), False)
+                utime.sleep_ms(300)
+                continue
+
+            tx, ty = touch.read()
+            # Top bar navigation
+            if ty < 35:
+                if tx < 80:
+                    page = 0
+                elif tx < 160:
+                    page = 1
+                elif tx < 240:
+                    page = 2
+                else:
+                    page = 3
+                data = build_display_data(indoor, weather, history, ntp_now())
+                screen_render(page, data, is_standby)
+                utime.sleep_ms(300)
+            
+            # M5Stack Core2 Virtual Buttons (Bottom bezel)
+            elif ty > 240:
+                if tx < 106:      # Button A
+                    page = (page - 1) % NUM_PAGES
+                elif tx > 213:    # Button C
+                    page = (page + 1) % NUM_PAGES
+                else:             # Button B
+                    try:
+                        speaker.tone(1000, 100)
+                    except: pass
+                
+                data = build_display_data(indoor, weather, history, ntp_now())
+                screen_render(page, data, is_standby)
+                utime.sleep_ms(300)
+                    
+            utime.sleep_ms(50) # debounce
+
+        # PIR wakeup (only on transition from 0 to 1 to avoid floating pin block)
+        current_pir = 0
+        try:
+            if _pir: current_pir = _pir.state
+        except:
+            pass
+            
+        if current_pir == 1 and last_pir_state == 0:
+            last_interaction = now
+            if is_standby:
+                is_standby = False
+                set_screen_brightness(100)
+                screen_render(page, build_display_data(indoor, weather, history, ntp_now()), False, True)
+        elif current_pir == 1:
+            pass
+            
+        last_pir_state = current_pir
+
+        # Standby logic
+        if not is_standby and (now - last_interaction) > STANDBY_TIMEOUT:
+            is_standby = True
+            set_screen_brightness(100)  # User requested brightness à fond
+            screen_render(page, build_display_data(indoor, weather, history, ntp_now()), True, True)
 
         # Read sensors
         if now - last_sensor >= SENSOR_READ_INTERVAL:
@@ -1085,53 +1249,48 @@ def main():
                 weather = w
             last_weather = now
 
-        # Refresh display
-        if now - last_display >= DISPLAY_TICK:
+        # Refresh display (meteo)
+        if now - last_display >= (1 if is_standby else DISPLAY_TICK):
             time_now = ntp_now()
-            data = build_display_data(
-                indoor, weather, history, time_now,
-                wifi_networks, wifi_selected
-            )
-            screen_render(page, data)
+            data = build_display_data(indoor, weather, history, time_now)
+            screen_render(page, data, is_standby, False)
             last_display = now
+            
+        # Poll dashboard commands every 5 seconds (reduces HTTP blocking to improve UI responsiveness)
+        if now - last_poll >= 5:
+            cmds = device_poll_sync()
+            for cmd in cmds:
+                action = cmd.get("type")
+                value = cmd.get("value")
+                if action == "set_page":
+                    try:
+                        p = int(value)
+                        if 0 <= p < NUM_PAGES:
+                            page = p
+                            screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
+                    except: pass
+                elif action == "prev_page":
+                    page = (page - 1) % NUM_PAGES
+                    screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
+                elif action == "next_page":
+                    page = (page + 1) % NUM_PAGES
+                    screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
+                elif action == "set_brightness":
+                    set_screen_brightness(int(value))
+                elif action == "set_volume":
+                    try:
+                        import machine
+                        speaker.setVolume(int(value))
+                    except: pass
+                elif action == "play_audio":
+                    voice_speak(str(value))
+            last_poll = now
 
-        # ── Buttons ──────────────────────────────────────────────────────────
-        if btnA.wasPressed():
-            if page == 3 and wifi_networks:
-                wifi_selected = (wifi_selected - 1) % len(wifi_networks)
-            elif page > 0:
-                page -= 1
-                if page == 2:
-                    history = cloud_get_history()
+        utime.sleep_ms(20)
 
-        if btnC.wasPressed():
-            if page == 3 and wifi_networks:
-                wifi_selected = (wifi_selected + 1) % len(wifi_networks)
-            elif page < NUM_PAGES - 1:
-                page += 1
-                if page == 2:
-                    history = cloud_get_history()
-                if page == 3:
-                    wifi_networks = wifi_scan()
-                    wifi_selected = 0
+try:
+    import machine
+    machine.freq(240000000)
+except: pass
 
-        if btnB.wasPressed():
-            if page == 3 and wifi_networks:
-                net  = wifi_networks[wifi_selected]
-                ssid = net["ssid"]
-                screen_show_loading("Connecting to {}...".format(ssid[:20]))
-                ok = wifi_connect(ssid, "")
-                if ok:
-                    wifi_networks = []
-            else:
-                data = build_display_data(
-                    indoor, weather, history, time_now,
-                    wifi_networks, wifi_selected
-                )
-                run_voice_qa(indoor, weather, history, time_now)
-
-        utime.sleep_ms(100)
-
-
-# Entry point
 main()
