@@ -4,6 +4,7 @@ Integrates the tts-module-main robust logic.
 """
 import uuid
 import base64
+import traceback
 from flask import Blueprint, request, jsonify, Response
 
 # Import the newly copied tts module logic
@@ -71,7 +72,7 @@ def announce():
     try:
         audio_bytes = service.get_audio(text)
     except Exception as e:
-        return jsonify({"error": f"Service TTS indisponible: {e}"}), 503
+        return jsonify({"error": f"Service TTS indisponible: {e}\n\nTRACEBACK:\n{traceback.format_exc()}"}), 503
 
     announcements.mark_announced(event_type)
 
@@ -96,22 +97,22 @@ def listen():
     try:
         transcription = stt.transcribe_wav(audio_bytes)
     except Exception as e:
-        return jsonify({"error": f"Service de transcription indisponible: {e}"}), 503
+        return jsonify({"error": f"Service de transcription indisponible: {e}\n\nTRACEBACK:\n{traceback.format_exc()}"}), 503
 
     if not transcription:
         # Fallback if no voice was detected
-        reponse_texte = "Désolé, je n'ai pas bien compris. Pouvez-vous répéter ?"
+        reponse_texte = "Desole, je n'ai pas bien compris. Pouvez-vous repeter ?"
         transcription = "..."
     else:
         try:
             reponse_texte = llm.generate_reply(transcription)
         except Exception as e:
-            return jsonify({"error": f"Service LLM indisponible: {e}"}), 503
+            return jsonify({"error": f"Service LLM indisponible: {e}\n\nTRACEBACK:\n{traceback.format_exc()}"}), 503
 
     try:
         audio_reponse = service.get_audio(reponse_texte)
     except Exception as e:
-        return jsonify({"error": f"Service TTS indisponible: {e}"}), 503
+        return jsonify({"error": f"Service TTS indisponible: {e}\n\nTRACEBACK:\n{traceback.format_exc()}"}), 503
 
     return jsonify({
         "status": "ok",
