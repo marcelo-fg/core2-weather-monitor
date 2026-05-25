@@ -48,18 +48,56 @@ def get_current(location: str = None) -> dict | None:
         return None
 
 
-def get_forecast(location: str = None) -> list:
-    """Return 5-day daily forecast."""
+def get_forecast(location: str = None) -> dict:
+    """Return 5-day daily forecast and next 5 3-hour blocks."""
     loc = location or DEFAULT_LOCATION
     data = _get("forecast", {"q": loc, "cnt": 40})
     if data is None:
-        return []
+        return {"daily": [], "hourly": []}
 
-    DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    
+    # 1. Hourly (NOW + next 5 blocks)
+    hourly = []
+    
+    # First block is NOW
+    current = get_current(loc)
+    if current:
+        hourly.append({
+            "time": "NOW",
+            "temp": current["temp"],
+            "condition": current["condition"],
+            "icon": current["icon"]
+        })
+    else:
+        # Fallback if current fails but forecast works
+        hourly.append({
+            "time": "NOW",
+            "temp": 0,
+            "condition": "Unknown",
+            "icon": "01d"
+        })
+        
+    import datetime
+    from config import TIMEZONE_OFFSET
+    now_utc = datetime.datetime.utcnow().timestamp()
+    
+    # Filter out blocks that are in the past
+    future_blocks = [item for item in data.get("list", []) if item["dt"] > now_utc]
+    
+    for item in future_blocks[:5]:
+        dt = datetime.datetime.utcfromtimestamp(item["dt"]) + datetime.timedelta(hours=TIMEZONE_OFFSET)
+        hourly.append({
+            "time": dt.strftime("%H:%M"),
+            "temp": item["main"]["temp"],
+            "condition": item["weather"][0]["main"],
+            "icon": item["weather"][0]["icon"]
+        })
+
+    # 2. Daily
     days: dict = {}
     for item in data.get("list", []):
-        import datetime
-        dt = datetime.datetime.utcfromtimestamp(item["dt"])
+        dt = datetime.datetime.utcfromtimestamp(item["dt"]) + datetime.timedelta(hours=TIMEZONE_OFFSET)
         label = dt.strftime("%d/%m")
         dow = DAYS[dt.weekday()]
         if label not in days:
@@ -85,9 +123,10 @@ def get_forecast(location: str = None) -> list:
             "icon":      d["icon"],
             "rain_prob": max(d["rain_list"]) if d["rain_list"] else 0,
         })
-        if len(result) >= 5:
+        if len(result) >= 8:
             break
-    return result
+            
+    return {"daily": result, "hourly": hourly}
 
 
 def get_full_weather(location: str = None) -> dict:

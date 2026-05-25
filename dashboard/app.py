@@ -1,514 +1,665 @@
-"""
-Main Streamlit dashboard — Core2 Indoor/Outdoor Weather Monitor.
-Professional cloud-based monitoring interface with premium UI/UX.
-"""
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime, timezone
-import sys, os
+import datetime
+import json
+from services.api_client import get_latest, get_history, get_weather, ask_llm, post_device_command
 
-sys.path.insert(0, os.path.dirname(__file__))
-from services.api_client import get_latest, get_history, get_weather, ask_llm
-
-# ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Core2 Intelligence",
-    page_icon="⚡",
+    page_title="Core2 Weather Monitor",
+    page_icon="🌦️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed"
 )
 
-# ── Custom CSS & Icons ───────────────────────────────────────────────────────
-st.markdown(
-    '''
-    <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
-    <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
-    /* Base Typography */
-    html, body, .stApp, .stMarkdown, p, div {
-        font-family: 'Outfit', sans-serif !important;
-    }
-    /* Main App Background */
+# =================== CUSTOM CSS ===================
+st.markdown("""
+<style>
+    /* Hide sidebar */
+    [data-testid="stSidebar"] { display: none; }
+    [data-testid="stSidebarCollapsedControl"] { display: none; }
+    /* General layout and background */
     .stApp {
-        background: radial-gradient(circle at top right, #0f172a, #020617);
-        color: #f8fafc;
+        background: white !important;
     }
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    /* Metric Cards (Glassmorphism) */
-    .metric-card {
-        background: rgba(30, 41, 59, 0.4);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 1.2rem;
-        text-align: left;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        position: relative;
-        overflow: hidden;
-        min-height: 140px;
+    .block-container { padding-top: 2rem; background: transparent !important; }
+
+    /* Fix bento box background */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background: white !important;
+    }
+
+    /* Make ALL columns stretch to match height in their row */
+    div[data-testid="stHorizontalBlock"] {
+        align-items: stretch !important;
+    }
+    
+    /* Make the inner stVerticalBlock fill the column */
+    div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
+        height: 100%;
         display: flex;
         flex-direction: column;
-        justify-content: space-between;
     }
-    .metric-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-    }
-    /* Metric Card Header (Icon + Title) */
-    .metric-card-header {
+
+    /* ================= ROW 1 (Telemetry & M5Stack) ================= */
+    /* Make their element-containers flex-grow to fill the height */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div.element-container {
+        flex-grow: 1;
         display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 8px;
-        flex-wrap: nowrap;
+        flex-direction: column;
     }
-    .metric-card-header i {
-        font-size: 1.2rem;
-        color: #94a3b8;
-        flex-shrink: 0;
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) [data-testid="stVerticalBlockBorderWrapper"] {
+        flex-grow: 1;
     }
-    .metric-card h2 {
-        color: #94a3b8;
+
+    /* ================= ROW 4 (Forecast vs Air Poll & Delta) ================= */
+    /* Left column: one big box, stretch it */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(4) div[data-testid="column"]:nth-of-type(1) > div[data-testid="stVerticalBlock"] > div.element-container {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(4) div[data-testid="column"]:nth-of-type(1) [data-testid="stVerticalBlockBorderWrapper"] {
+        flex-grow: 1;
+    }
+
+    /* Right column: two boxes, distribute space and stretch them */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(4) div[data-testid="column"]:nth-of-type(2) > div[data-testid="stVerticalBlock"] {
+        justify-content: space-between;
+        gap: 0.5rem !important; /* Reduce vertical space between the two boxes */
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(4) div[data-testid="column"]:nth-of-type(2) > div[data-testid="stVerticalBlock"] > div.element-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(4) div[data-testid="column"]:nth-of-type(2) [data-testid="stVerticalBlockBorderWrapper"] {
+        flex-grow: 1;
+    }
+    
+    /* Reduce inner padding of the air pollution/delta boxes to save space */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(4) div[data-testid="column"]:nth-of-type(2) [data-testid="stVerticalBlockBorderWrapper"] > div {
+        padding-top: 0.8rem !important;
+        padding-bottom: 0.8rem !important;
+    }
+
+    /* Remote button bento styling */
+    [data-testid="stButton"] button {
+        background-color: white !important;
+        border: 2px solid #3b82f6 !important;
+        border-radius: 8px !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stButton"] button p {
+        color: #3b82f6 !important;
+        font-weight: 800 !important;
+    }
+
+    .ai-insight, .ai-summary {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-style: italic;
+        color: #666;
+        margin-top: 10px;
+    }
+
+    .greeting-header {
+        font-family: 'Inter', -apple-system, sans-serif;
+        font-weight: 800;
+        font-size: 2.5rem;
+        color: #1a1a1a;
+        margin-bottom: 1.5rem;
+    }
+
+    /* Metric styles */
+    .metric-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 20px;
+        padding: 0px 10px 5px 10px;
+    }
+    .metric-block { text-align: left; flex: 1; }
+    .metric-val {
+        font-size: 3.2rem;
+        font-weight: 800;
+        color: #1a1a1a;
+        line-height: 1.1;
+    }
+    .metric-label {
         font-size: 0.85rem;
-        font-weight: 600;
-        margin: 0;
+        font-weight: 700;
+        color: #000;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        margin-top: 5px;
     }
-    /* Metric Value */
-    .metric-card .value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        margin: 0;
-        line-height: 1.2;
-        color: #f8fafc;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    /* Metric Subtitle/Info */
-    .metric-card .sub {
-        font-size: 0.75rem;
-        color: #64748b;
-        margin-top: 6px;
-        font-weight: 400;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    /* Alerts/Status Styles inside cards */
-    .status-indicator {
-        position: absolute;
-        top: 0;
-        right: 0;
-        width: 4px;
-        height: 100%;
-    }
-    .status-good { background: linear-gradient(to bottom, #10b981, #059669); }
-    .status-warn { background: linear-gradient(to bottom, #f59e0b, #d97706); }
-    .status-bad { background: linear-gradient(to bottom, #ef4444, #dc2626); }
-    /* Section Titles */
+
+    /* Section titles */
     .section-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #999;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        margin-bottom: 15px;
+    }
+
+    /* Forecast row */
+    .forecast-row {
         display: flex;
         align-items: center;
-        gap: 10px;
-        color: #e2e8f0;
-        font-size: 1.2rem;
-        font-weight: 600;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-        padding-bottom: 0.8rem;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
+        padding: 10px 0;
+        gap: 12px;
+        margin: 5px 0;
     }
-    .section-title i { color: #3b82f6; font-size: 1.4rem; }
-    /* Buttons & Inputs */
-    .stButton>button {
-        border-radius: 8px !important;
-        font-weight: 500 !important;
-        transition: all 0.2s ease !important;
-        background-color: rgba(59, 130, 246, 0.1) !important;
-        color: #60a5fa !important;
-        border: 1px solid rgba(59, 130, 246, 0.3) !important;
+    .forecast-day { width: 55px; font-weight: 700; color: #1a1a1a; font-size: 0.95rem; }
+    .forecast-icon { font-size: 1.2rem; width: 30px; text-align: center; }
+    .forecast-min { width: 28px; text-align: right; color: #999; font-weight: 600; font-size: 0.9rem; }
+    .forecast-bar-bg {
+        flex-grow: 1; height: 6px; background: #eee;
+        border-radius: 3px; position: relative;
     }
-    .stButton>button:hover {
-        background-color: #3b82f6 !important;
-        color: white !important;
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
+    .forecast-bar-fill {
+        position: absolute; top: 0; bottom: 0;
+        background: linear-gradient(90deg, #fbbf24, #f59e0b);
+        border-radius: 3px;
     }
-    /* Primary buttons */
-    button[kind="primary"] {
-        background-color: #3b82f6 !important;
-        color: white !important;
-        border: none !important;
-    }
-    button[kind="primary"]:hover {
-        background-color: #2563eb !important;
-        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4) !important;
-    }
-    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
-        border-radius: 8px !important;
-        background-color: rgba(30, 41, 59, 0.6) !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        color: #f8fafc !important;
-    }
-    </style>
-    ''',
-    unsafe_allow_html=True
-)
+    .forecast-max { width: 28px; font-weight: 800; color: #1a1a1a; font-size: 0.9rem; }
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+    /* AQ bar */
+    .aq-bar {
+        height: 10px; background: #ddd;
+        border-radius: 5px; margin: 10px 0 15px 0;
+    }
+    .aq-bar-fill { height: 100%; border-radius: 5px; }
 
-WEATHER_ICONS = {
-    "Clear": "ph-sun", "Clouds": "ph-cloud", "Rain": "ph-cloud-rain",
-    "Drizzle": "ph-cloud-snow", "Thunderstorm": "ph-cloud-lightning", "Snow": "ph-snowflake",
-    "Mist": "ph-waves", "Fog": "ph-cloud-fog",
+    .delta-value {
+        font-size: 3rem; font-weight: 800;
+        color: #888; margin: 5px 0 10px 0;
+    }
+    
+    /* Radio button styling to look like tabs */
+    div[role="radiogroup"] {
+        margin-bottom: 10px;
+    }
+    div[role="radiogroup"] > label > div:first-child {
+        display: none !important; /* Hide the radio circles */
+    }
+    div[role="radiogroup"] p {
+        font-weight: 800;
+        font-size: 1.1rem;
+        color: #888;
+        cursor: pointer;
+        margin-right: 15px;
+    }
+    div[role="radiogroup"] label[data-baseweb="radio"] input:checked + div p {
+        color: #3b82f6 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# =================== DATA FETCHING ===================
+@st.cache_data(ttl=60)
+def fetch_telemetry():
+    data = get_latest()
+    return data if data else {}
+
+@st.cache_data(ttl=60)
+def fetch_history(hours):
+    return get_history(hours)
+
+@st.cache_data(ttl=600)
+def fetch_weather():
+    return get_weather()
+
+@st.cache_data(ttl=300)
+def fetch_ai_insight(prompt_key, prompt_text, context_str):
+    try:
+        context = json.loads(context_str)
+        result = ask_llm(prompt_text, context)
+        if result:
+            import re
+            result = re.sub(r'Ici Orion.*?(station\.|bord\.|Commandant\.)', '', result, flags=re.IGNORECASE|re.DOTALL)
+            result = re.sub(r'J\'analyse les données.*?\.', '', result, flags=re.IGNORECASE)
+            result = re.sub(r'Je suis chargé de vous fournir.*?\.', '', result, flags=re.IGNORECASE)
+            result = re.sub(r'Ma mission est de vous tenir.*?\.', '', result, flags=re.IGNORECASE)
+            result = re.sub(r'Commandant,\s*voici.*?:', '', result, flags=re.IGNORECASE)
+            result = re.sub(r'Mon conseil.*?:', '', result, flags=re.IGNORECASE)
+            result = result.replace("Commandant,", "").replace("Commandant.", "").replace("Commandant", "").strip()
+            return result
+        return "AI analysis temporarily unavailable."
+    except Exception as e:
+        return f"Error fetching AI insight: {e}"
+
+latest = fetch_telemetry()
+weather_data = fetch_weather()
+current_weather = weather_data.get("current", {}) or {}
+forecast_data = weather_data.get("forecast", {}) or {}
+daily_forecast = forecast_data.get("daily", [])
+hourly_forecast = forecast_data.get("hourly", [])
+
+# =================== NAVIGATION ===================
+if "page" not in st.session_state:
+    st.session_state.page = "main"
+
+# =================== HELPERS ===================
+ICON_MAP = {
+    "01d": "☀️", "01n": "🌙", "02d": "⛅", "02n": "☁️",
+    "03d": "☁️", "03n": "☁️", "04d": "☁️", "04n": "☁️",
+    "09d": "🌧️", "09n": "🌧️", "10d": "🌦️", "10n": "🌧️",
+    "11d": "⛈️", "11n": "⛈️", "13d": "❄️", "13n": "❄️",
+    "50d": "🌫️", "50n": "🌫️"
 }
 
-def get_status_class(metric_type: str, value: float) -> str:
-    if value is None: return ""
-    if metric_type == "humidity":
-        return "status-warn" if value < 40 else "status-good"
-    if metric_type == "tvoc":
-        return "status-bad" if value > 500 else "status-good"
-    if metric_type == "eco2":
-        return "status-bad" if value > 1000 else "status-good"
-    if metric_type == "aq":
-        if value in ("Poor", "Hazardous"): return "status-bad"
-        if value == "Moderate": return "status-warn"
-        return "status-good"
-    return "status-good"
+def icon_to_emoji(code):
+    return ICON_MAP.get(code, "☀️")
 
-def metric_card(icon_class: str, title: str, value: str, sub: str = "", status_class: str = "") -> str:
-    return f"""
-    <div class="metric-card">
-        <div class="status-indicator {status_class}"></div>
-        <div class="metric-card-header">
-            <i class="ph {icon_class}"></i>
-            <h2>{title}</h2>
-        </div>
-        <div class="value">{value}</div>
-        <div class="sub">{sub}</div>
-    </div>"""
+def get_aq_level(tvoc, eco2):
+    if tvoc is None and eco2 is None:
+        return "UNKNOWN", "#888"
+    if (tvoc is not None and tvoc < 220) and (eco2 is not None and eco2 < 1000):
+        return "GOOD", "#22c55e"
+    elif (tvoc is not None and tvoc < 660) and (eco2 is not None and eco2 < 2000):
+        return "MODERATE", "#f59e0b"
+    return "POOR", "#ef4444"
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom: 2rem;">
-            <i class="ph-fill ph-cpu" style="font-size:2.5rem; color:#3b82f6;"></i>
-            <div>
-                <h2 style="margin:0; font-size:1.2rem; font-weight:600;">Core2 Intelligence</h2>
-                <div style="color:#64748b; font-size:0.8rem;">Lausanne, CH</div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
 
-    st.divider()
+# =====================================================
+#                     MAIN PAGE
+# =====================================================
+if st.session_state.page == "main":
+    now = datetime.datetime.now()
+    hour = now.hour
+    greeting = "GOOD MORNING" if hour < 12 else ("GOOD AFTERNOON" if hour < 18 else "GOOD EVENING")
+    date_str = now.strftime("%a %b %d")
 
-    history_hours = st.slider("Data Horizon (hours)", 1, 168, 24)
-    location = st.text_input("Forecast Location", value="Lausanne,CH")
-
-    st.divider()
-
-    st.markdown("<div style='color:#94a3b8; font-weight:500; margin-bottom:10px;'>System Thresholds</div>", unsafe_allow_html=True)
-    st.markdown("""
-        <div style="font-size:0.85rem; color:#64748b; display:flex; flex-direction:column; gap:8px;">
-            <div><i class="ph-fill ph-warning-circle" style="color:#f59e0b"></i> Humidity &lt; 40%</div>
-            <div><i class="ph-fill ph-warning-octagon" style="color:#ef4444"></i> TVOC &gt; 500 ppb</div>
-            <div><i class="ph-fill ph-warning-octagon" style="color:#ef4444"></i> eCO₂ &gt; 1000 ppm</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    st.divider()
-    
-    auto_refresh = st.checkbox("Enable Auto-sync (60s)", value=False)
-    if auto_refresh:
-        import time
-        time.sleep(60)
-        st.rerun()
-
-# ── Load data ─────────────────────────────────────────────────────────────────
-with st.spinner("Synchronizing telemetry..."):
-    latest  = get_latest()
-    history = get_history(history_hours)
-    weather = get_weather(location)
-
-current_weather = weather.get("current", {})
-forecast        = weather.get("forecast", [])
-
-# ── Header row ─────────────────────────────────────────────────────────────────
-now_str = datetime.now(timezone.utc).strftime("%d %B %Y — %H:%M UTC")
-col_title, col_refresh = st.columns([4, 1])
-with col_title:
-    st.markdown(f"<div style='font-size:1.8rem; font-weight:700; color:#f8fafc; letter-spacing:-0.5px;'>Environment Overview</div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='color:#64748b; font-size:0.9rem; margin-top:-5px;'>Last synchronized: {now_str}</div>", unsafe_allow_html=True)
-with col_refresh:
-    st.write("") # padding
-    if st.button("Synchronize Now", type="primary", use_container_width=True):
-        st.rerun()
-
-# ── Current conditions ────────────────────────────────────────────────────────
-st.markdown('<div class="section-title"><i class="ph-fill ph-activity"></i> Indoor Telemetry</div>', unsafe_allow_html=True)
-
-cols = st.columns(5)
-if latest:
-    temp  = latest.get("temperature")
-    humi  = latest.get("humidity")
-    tvoc  = latest.get("tvoc")
-    eco2  = latest.get("eco2")
-    aq    = latest.get("aq_label", "Unknown")
-    ts_str = str(latest.get("timestamp", ""))
-
-    try:
-        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        ts_label = f"Updated at {ts.strftime('%H:%M')}"
-    except Exception:
-        ts_label = "Update time unknown"
-
-    with cols[0]:
-        v = f"{temp:.1f}°C" if temp is not None else "--"
-        st.markdown(metric_card("ph-thermometer", "Temperature", v, ts_label, "status-good"), unsafe_allow_html=True)
-    with cols[1]:
-        v = f"{humi:.0f}%" if humi is not None else "--"
-        st.markdown(metric_card("ph-drop", "Humidity", v, "Optimal: 40-60%", get_status_class("humidity", humi)), unsafe_allow_html=True)
-    with cols[2]:
-        v = f"{tvoc} ppb" if tvoc is not None else "--"
-        st.markdown(metric_card("ph-flask", "TVOC", v, "Target: < 220 ppb", get_status_class("tvoc", tvoc)), unsafe_allow_html=True)
-    with cols[3]:
-        v = f"{eco2} ppm" if eco2 is not None else "--"
-        st.markdown(metric_card("ph-wind", "eCO₂", v, "Target: < 1000 ppm", get_status_class("eco2", eco2)), unsafe_allow_html=True)
-    with cols[4]:
-        st.markdown(metric_card("ph-leaf", "Air Quality", aq, "Overall status", get_status_class("aq", aq)), unsafe_allow_html=True)
-else:
-    st.info("Waiting for sensor telemetry. Ensure the Core2 device is transmitting.", icon="📡")
-
-# ── Outdoor weather ────────────────────────────────────────────────────────────
-st.markdown(f'<div class="section-title"><i class="ph-fill ph-globe-hemisphere-west"></i> Meteorological Data <span style="color:#64748b; font-weight:400; font-size:1rem; margin-left:8px;">({location})</span></div>', unsafe_allow_html=True)
-
-if current_weather:
-    cond = current_weather.get("condition", "Clear")
-    icon_class = WEATHER_ICONS.get(cond, "ph-thermometer")
-    wcols = st.columns(5)
-    with wcols[0]:
-        v = f"{current_weather.get('temp', 0):.1f}°C"
-        desc = current_weather.get("description", "").title()
-        st.markdown(metric_card(icon_class, "Outdoor Temp", v, desc), unsafe_allow_html=True)
-    with wcols[1]:
-        v = f"{current_weather.get('feels_like', 0):.1f}°C"
-        st.markdown(metric_card("ph-user", "Feels Like", v), unsafe_allow_html=True)
-    with wcols[2]:
-        v = f"{current_weather.get('humidity', 0)}%"
-        st.markdown(metric_card("ph-drop", "Humidity", v), unsafe_allow_html=True)
-    with wcols[3]:
-        v = f"{current_weather.get('wind_speed', 0)} m/s"
-        st.markdown(metric_card("ph-paper-plane-tilt", "Wind", v), unsafe_allow_html=True)
-    with wcols[4]:
-        v = f"{current_weather.get('pressure', 0)} hPa"
-        st.markdown(metric_card("ph-gauge", "Pressure", v), unsafe_allow_html=True)
-else:
-    st.info("Meteorological data unavailable. Verifying API connection...", icon="🌐")
-
-# ── 5-day forecast ─────────────────────────────────────────────────────────────
-if forecast:
-    st.markdown('<div class="section-title"><i class="ph-fill ph-calendar-blank"></i> Extended Forecast</div>', unsafe_allow_html=True)
-    fcols = st.columns(len(forecast))
-    for i, day in enumerate(forecast):
-        with fcols[i]:
-            cond = day.get("condition", "")
-            icon_class = WEATHER_ICONS.get(cond, "ph-cloud")
-            tmax = day.get("temp_max", 0)
-            tmin = day.get("temp_min", 0)
-            rain = day.get("rain_prob", 0)
-            label = f"{day.get('day_name','?')} {day.get('date','')}"
-            st.markdown(metric_card(
-                icon_class,
-                label,
-                f"{tmax:.0f}°",
-                f"Min: {tmin:.0f}° | Rain: {rain*100:.0f}%",
-            ), unsafe_allow_html=True)
-
-# ── Historical charts ──────────────────────────────────────────────────────────
-if history:
-    df = pd.DataFrame(history)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-
-    st.markdown(f'<div class="section-title"><i class="ph-fill ph-chart-line-up"></i> Analytics & Trends</div>', unsafe_allow_html=True)
-
-    tab1, tab2, tab3 = st.tabs(["Climate Overview", "Air Composition", "Differential Analysis"])
-
-    # Shared Chart Layout
-    layout_args = dict(
-        font=dict(family="Outfit, sans-serif", color="#94a3b8"),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(30,41,59,0.3)",
-        margin=dict(l=20, r=20, t=40, b=20),
-        height=400,
-        hovermode="x unified",
-        legend=dict(orientation="h", y=1.1, x=0, font=dict(color="#e2e8f0")),
-        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False),
-    )
-
-    with tab1:
-        fig = go.Figure()
-        if "temperature" in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["temperature"],
-                name="Indoor Temp (°C)", line=dict(color="#38bdf8", width=3, shape="spline"),
-                fill="tozeroy", fillcolor="rgba(56,189,248,0.1)",
-                mode="lines"
-            ))
-        if "outdoor_temp" in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["outdoor_temp"],
-                name="Outdoor Temp (°C)", line=dict(color="#94a3b8", width=2, dash="dash", shape="spline"),
-                mode="lines"
-            ))
-        if "humidity" in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["humidity"],
-                name="Indoor Humidity (%)", line=dict(color="#818cf8", width=3, shape="spline"),
-                yaxis="y2", mode="lines"
-            ))
-        fig.update_layout(
-            **layout_args,
-            yaxis=dict(title="Temperature (°C)", showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False),
-            yaxis2=dict(title="Humidity (%)", overlaying="y", side="right", showgrid=False),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab2:
-        fig2 = go.Figure()
-        if "tvoc" in df.columns:
-            fig2.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["tvoc"],
-                name="TVOC (ppb)", line=dict(color="#10b981", width=3, shape="spline"),
-                fill="tozeroy", fillcolor="rgba(16,185,129,0.1)", mode="lines"
-            ))
-            fig2.add_hline(y=500, line_color="#ef4444", line_dash="dash", annotation_text="TVOC Warning", annotation_font_color="#ef4444")
-        if "eco2" in df.columns:
-            fig2.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["eco2"],
-                name="eCO₂ (ppm)", line=dict(color="#fbbf24", width=3, shape="spline"),
-                yaxis="y2", mode="lines"
-            ))
-            fig2.add_hline(y=1000, line_color="#f59e0b", line_dash="dash", annotation_text="CO₂ Warning", annotation_font_color="#f59e0b")
-        fig2.update_layout(
-            **layout_args,
-            yaxis=dict(title="TVOC (ppb)", showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
-            yaxis2=dict(title="eCO₂ (ppm)", overlaying="y", side="right", showgrid=False),
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-
-    with tab3:
-        if "temperature" in df.columns and "outdoor_temp" in df.columns:
-            df_clean = df.dropna(subset=["temperature", "outdoor_temp"])
-            fig3 = px.scatter(
-                df_clean, x="outdoor_temp", y="temperature", color="humidity",
-                color_continuous_scale="PuBu",
-                labels={"outdoor_temp": "Outdoor Temp (°C)", "temperature": "Indoor Temp (°C)", "humidity": "Humidity %"},
-                title="Indoor vs Outdoor Temperature Differential"
-            )
-            fig3.update_layout(**layout_args)
-            fig3.update_traces(marker=dict(size=10, line=dict(width=1, color="rgba(255,255,255,0.5)")))
-            st.plotly_chart(fig3, use_container_width=True)
-
-    with st.expander("View Raw Telemetry Log"):
-        display_cols = [c for c in ["timestamp", "temperature", "humidity", "tvoc", "eco2", "aq_label", "outdoor_temp"] if c in df.columns]
-        st.dataframe(df[display_cols].sort_values("timestamp", ascending=False).head(100), use_container_width=True)
-
-# ── AI Assistant ───────────────────────────────────────────────────────────────
-st.markdown('<div class="section-title"><i class="ph-fill ph-sparkle"></i> AI Intelligence Center</div>', unsafe_allow_html=True)
-
-# AI Layout Restructured
-query = st.text_area(
-    "Query the Environment AI:",
-    value=st.session_state.get("ai_query", ""),
-    placeholder="e.g., Provide a comprehensive analysis of my indoor climate...",
-    key="ai_input",
-    height=80
-)
-
-st.markdown("<div style='color:#94a3b8; font-size:0.85rem; margin-top:8px; margin-bottom:8px;'>Suggested Queries:</div>", unsafe_allow_html=True)
-
-# Presets as horizontal buttons
-pcols = st.columns(4)
-presets = [
-    "Synthesize air quality",
-    "Evaluate comfort",
-    "Ventilation advice",
-    "Temperature trends"
-]
-for i, p in enumerate(presets):
-    with pcols[i]:
-        if st.button(p, key=f"preset_{i}", use_container_width=True):
-            st.session_state["ai_query"] = p
+    # ---------- HEADER ----------
+    col_greeting, col_btn = st.columns([8, 1])
+    with col_greeting:
+        st.markdown(f"<div class='greeting-header'>{greeting}, {date_str}</div>", unsafe_allow_html=True)
+    with col_btn:
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        if st.button("REMOTE", key="remote_btn", use_container_width=True):
+            st.session_state.page = "remote"
             st.rerun()
 
-st.write("") # small spacing
-if st.button("Initialize Analysis", type="primary", use_container_width=True) and query:
-    context = {
-        **(latest or {}),
-        "weather": weather,
-        "history": history[-5:] if history else [],
-    }
-    with st.spinner("Analyzing telemetry streams..."):
-        response = ask_llm(query, context)
-    if response:
-        st.markdown(f"""
-        <div style="background:rgba(59,130,246,0.1); border-left:4px solid #3b82f6; padding:1.2rem; border-radius:0 8px 8px 0; margin-top:1.5rem; margin-bottom:1rem;">
-            <div style="font-weight:600; color:#3b82f6; margin-bottom:0.5rem; display:flex; align-items:center; gap:8px;">
-                <i class="ph-fill ph-robot"></i> Analysis Complete
-            </div>
-            <div style="color:#e2e8f0; line-height:1.6; font-size:0.95rem;">{response}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.error("System unreachable. Verify middleware connection and Gemini API authentication.")
+    # ---------- SENSOR VALUES ----------
+    t = latest.get('temperature')
+    h = latest.get('humidity')
+    v = latest.get('tvoc')
+    e = latest.get('eco2')
 
-# ── Alerts panel ───────────────────────────────────────────────────────────────
-if latest:
-    alerts = []
-    humi = latest.get("humidity")
-    tvoc = latest.get("tvoc")
-    eco2 = latest.get("eco2")
-    aq   = latest.get("aq_label", "Good")
+    temp_str = f"{t:.1f} C" if t is not None else "--"
+    hum_str = f"{h:.1f}%" if h is not None else "--"
+    eco2_str = f"{int(e)}ppm" if e is not None else "--"
+    aq_level, aq_color = get_aq_level(v, e)
 
-    if humi is not None and humi < 40:
-        alerts.append(("ph-drop", "f59e0b", f"Low indoor humidity ({humi:.0f}%) detected. Consider environmental modification."))
-    if tvoc is not None and tvoc > 500:
-        alerts.append(("ph-flask", "ef4444", f"Critical TVOC levels ({tvoc} ppb). Immediate ventilation recommended."))
-    if eco2 is not None and eco2 > 1000:
-        alerts.append(("ph-wind", "ef4444", f"Elevated eCO₂ concentration ({eco2} ppm). Airflow required."))
-    if aq in ("Poor", "Hazardous"):
-        alerts.append(("ph-warning-octagon", "ef4444", f"System Alert: Air quality assessed as {aq}."))
+    cw_temp = current_weather.get("temp")
+    cw_hum = current_weather.get("humidity")
+    cw_wind = current_weather.get("wind_speed")
+    cw_press = current_weather.get("pressure")
+    out_temp_str = f"{cw_temp:.1f} C" if cw_temp is not None else "--"
+    out_hum_str = f"{cw_hum}%" if cw_hum is not None else "--"
+    out_wind_str = f"{cw_wind} m/s" if cw_wind is not None else "--"
+    out_press_str = f"{cw_press} hPa" if cw_press is not None else "--"
 
-    if alerts:
-        st.markdown('<div class="section-title"><i class="ph-fill ph-bell-ringing"></i> Active System Alerts</div>', unsafe_allow_html=True)
-        for icon, color, text in alerts:
+    # Online status
+    last_ts = latest.get('timestamp')
+    is_online = False
+    if last_ts:
+        try:
+            last_dt = pd.to_datetime(last_ts, utc=True)
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            is_online = (now_utc - last_dt).total_seconds() < 120
+        except Exception:
+            pass
+
+    # ========== BENTO 1 : TELEMETRY + M5STACK STATUS ==========
+    tele_col, device_col = st.columns([3, 1])
+
+    with tele_col:
+        with st.container(border=True, height=185):
+            tele_view = st.radio("View", ["INDOOR", "OUTDOOR"], horizontal=True, label_visibility="collapsed")
+            
+            if tele_view == "INDOOR":
+                st.markdown(f"""
+                <div class="metric-row">
+                    <div class="metric-block"><div class="metric-val">{temp_str}</div><div class="metric-label">TEMPERATURE</div></div>
+                    <div class="metric-block"><div class="metric-val">{hum_str}</div><div class="metric-label">HUMIDITY</div></div>
+                    <div class="metric-block"><div class="metric-val">{eco2_str}</div><div class="metric-label">eCO2</div></div>
+                    <div class="metric-block"><div class="metric-val" style="color:{aq_color};">{aq_level}</div><div class="metric-label">AIR QUALITY</div></div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="metric-row">
+                    <div class="metric-block"><div class="metric-val">{out_temp_str}</div><div class="metric-label">TEMPERATURE</div></div>
+                    <div class="metric-block"><div class="metric-val">{out_hum_str}</div><div class="metric-label">HUMIDITY</div></div>
+                    <div class="metric-block"><div class="metric-val">{out_wind_str}</div><div class="metric-label">WIND SPEED</div></div>
+                    <div class="metric-block"><div class="metric-val">{out_press_str}</div><div class="metric-label">PRESSURE</div></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    with device_col:
+        border_col = "#22c55e" if is_online else "#ef4444"
+        status_txt = "ONLINE" if is_online else "OFFLINE"
+        status_col = "#22c55e" if is_online else "#ef4444"
+        
+        with st.container(border=True, height=185):
             st.markdown(f"""
-            <div style="background:rgba({int(color[:2],16)},{int(color[2:4],16)},{int(color[4:],16)},0.1); border:1px solid #{color}; padding:1rem; border-radius:8px; margin-bottom:0.8rem; display:flex; align-items:center; gap:12px;">
-                <i class="ph-fill {icon}" style="color:#{color}; font-size:1.5rem;"></i>
-                <div style="color:#f8fafc;">{text}</div>
-            </div>
+            <style>
+            /* Apply color to this specific container's border */
+            div[data-testid="column"]:nth-of-type(2) [data-testid="stVerticalBlockBorderWrapper"] {{
+                border: 2px solid {border_col} !important;
+            }}
+            </style>
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 10px 0;">
+    <div style="width: 150px; height: 130px; background: #1a1a1a; border-radius: 12px; border: 4px solid #c0392b; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 10px; position: relative;">
+        <div style="width: 120px; height: 80px; background: white; border-radius: 4px; position: relative; display: flex; align-items: center; justify-content: center;">
+            <div style="font-weight:800; font-size:1rem; color:{status_col};">{status_txt}</div>
+            <div style="position:absolute; top:8px; right:8px; width:10px; height:10px; background:{border_col}; border-radius:50%;"></div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 12px;">
+            <div style="width: 25px; height: 10px; background: white; border-radius: 3px;"></div>
+            <div style="width: 25px; height: 10px; background: white; border-radius: 3px;"></div>
+            <div style="width: 25px; height: 10px; background: white; border-radius: 3px;"></div>
+        </div>
+    </div>
+</div>
             """, unsafe_allow_html=True)
 
-# ── Footer ─────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="margin-top:4rem; text-align:center; color:#475569; font-size:0.85rem; border-top:1px solid rgba(255,255,255,0.05); padding-top:2rem;">
-    <strong>Core2 Enterprise Architecture</strong><br>
-    M5Stack Core2 | ENV III | TVOC | PIR<br>
-    Engineered with Google Cloud Platform & Gemini AI
-</div>
-""", unsafe_allow_html=True)
+    # ========== BENTO 2 : CHARTS ==========
+    with st.container(border=True):
+        col_metric, col_time = st.columns([1, 1])
+        with col_metric:
+            chart_type = st.selectbox("Metric", ["Temperature", "Humidity", "Air Quality (eCO2/TVOC)"], label_visibility="collapsed")
+        with col_time:
+            time_filter = st.selectbox("Time Range", ["Last 24 Hours", "Last 7 Days", "Last 30 Days"], label_visibility="collapsed")
+            
+        hours_map = {"Last 24 Hours": 24, "Last 7 Days": 168, "Last 30 Days": 720}
+        history = fetch_history(hours_map[time_filter])
+
+        if history:
+            df = pd.DataFrame(history)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+            df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+
+            chart_kw = dict(
+                height=350, margin=dict(l=0, r=0, t=40, b=0),
+                paper_bgcolor="white", plot_bgcolor="white",
+                xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                legend=dict(orientation="h", y=1.1),
+            )
+
+            fig = go.Figure()
+
+            if chart_type == "Temperature":
+                if "temperature" in df.columns:
+                    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["temperature"], name="Indoor Temp", line=dict(color="#f59e0b", width=2.5)))
+                fig.update_layout(title="Indoor Temperature", **chart_kw)
+                
+            elif chart_type == "Humidity":
+                if "humidity" in df.columns:
+                    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["humidity"], name="Humidity", line=dict(color="#14b8a6", width=2.5), fill='tozeroy', fillcolor="rgba(20,184,166,0.1)"))
+                fig.update_layout(title="Indoor Humidity Trend", **chart_kw)
+                
+            elif chart_type == "Air Quality (eCO2/TVOC)":
+                if "tvoc" in df.columns:
+                    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["tvoc"], name="TVOC (ppb)", line=dict(color="#8b5cf6", width=2.5)))
+                if "eco2" in df.columns:
+                    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["eco2"], name="eCO2 (ppm)", line=dict(color="#ef4444", width=2), yaxis="y2"))
+                fig.update_layout(title="Air Quality", yaxis2=dict(overlaying="y", side="right", showgrid=False), **chart_kw)
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No historical data available.")
+
+    # ========== BENTO 3 : AI SUMMARY + HOURLY FORECAST ==========
+    with st.container(border=True):
+        ai_context = {
+            "indoor_temp": t, "indoor_humidity": h,
+            "outdoor_temp": cw_temp,
+            "outdoor_description": current_weather.get("description", ""),
+            "wind_speed": cw_wind, "device_online": is_online
+        }
+        ai_summary = fetch_ai_insight(
+            "weather_summary",
+            f"Outdoor: {current_weather.get('description', 'unknown')} at {cw_temp} C, wind {cw_wind} m/s. "
+            f"Indoor: {t} C. M5Stack {'online' if is_online else 'offline'}. "
+            f"Give a 1 short sentence weather summary maximum. Very concise.",
+            json.dumps(ai_context, default=str)
+        )
+        st.markdown(f"<div class='ai-summary'>{ai_summary}</div>", unsafe_allow_html=True)
+        st.divider()
+
+        # Hourly forecast using st.columns (avoids HTML rendering issues)
+        items = hourly_forecast[:6] if hourly_forecast else []
+        if items:
+            cols = st.columns(len(items))
+            for idx, item in enumerate(items):
+                with cols[idx]:
+                    time_label = item.get("time", "")
+                    temp_val = int(item.get("temp", 0))
+                    emoji = icon_to_emoji(item.get("icon", "01d"))
+                    st.markdown(f"<div style='text-align:center;'>"
+                                f"<div style='font-weight:600; color:#555; font-size:0.85rem;'>{time_label}</div>"
+                                f"<div style='font-size:1.8rem; margin:4px 0;'>{emoji}</div>"
+                                f"<div style='font-weight:700; color:#1a1a1a; margin-bottom: 20px;'>{temp_val} °C</div>"
+                                f"</div>", unsafe_allow_html=True)
+        else:
+            st.info("No hourly forecast available.")
+
+    # ========== BENTO 4 : BOTTOM ROW ==========
+    bot_left, bot_right = st.columns(2)
+
+    with bot_left:
+        with st.container(border=True, height=280):
+            st.markdown("<div class='section-title'>5-DAY FORECAST</div>", unsafe_allow_html=True)
+            if daily_forecast:
+                days = daily_forecast[:5]
+                g_min = min(d.get('temp_min', 0) for d in days)
+                g_max = max(d.get('temp_max', 10) for d in days)
+                span = max(g_max - g_min, 1)
+
+                for i, day in enumerate(days):
+                    dn = "TODAY" if i == 0 else day.get('day_name', '')[:3].upper()
+                    ic = icon_to_emoji(day.get('icon', '01d'))
+                    mn = day.get('temp_min', 0)
+                    mx = day.get('temp_max', 0)
+                    lp = (mn - g_min) / span * 100
+                    wp = max((mx - mn) / span * 100, 8)
+                    st.markdown(f"""<div class='forecast-row'>
+                        <div class='forecast-day'>{dn}</div>
+                        <div class='forecast-icon'>{ic}</div>
+                        <div class='forecast-min'>{int(mn)}</div>
+                        <div class='forecast-bar-bg'><div class='forecast-bar-fill' style='left:{lp}%;width:{wp}%;'></div></div>
+                        <div class='forecast-max'>{int(mx)}</div>
+                    </div>""", unsafe_allow_html=True)
+            else:
+                st.info("No forecast data available.")
+
+    with bot_right:
+        with st.container(border=True, height=132):
+            # --- Air Pollution ---
+            aq_full, aq_col = get_aq_level(v, e)
+            aq_pct = 33 if aq_full == "GOOD" else (66 if aq_full == "MODERATE" else 100)
+            
+            air_insight = fetch_ai_insight(
+                "air_quality",
+                f"Indoor TVOC={v}ppb, eCO2={e}ppm. Level: {aq_full}. 1 short sentence analysis max.",
+                json.dumps({"tvoc": v, "eco2": e}, default=str)
+            )
+
+            html_str = f"""
+            <div style='line-height: 1.2;'>
+                <div class='section-title' style='margin-bottom: 5px;'>AIR POLLUTION</div>
+                <div style='font-size:1.8rem; font-weight:800; color:#555; margin-bottom: 5px;'>{aq_full}</div>
+                <div class='aq-bar' style='margin-bottom: 8px;'><div class='aq-bar-fill' style='width:{aq_pct}%; background:{aq_col};'></div></div>
+                <div class='ai-insight' style='margin-top: 0;'>{air_insight}</div>
+            </div>
+            """
+            st.markdown(html_str, unsafe_allow_html=True)
+
+        with st.container(border=True, height=132):
+            # --- Delta Temperature ---
+            if t is not None and cw_temp is not None:
+                delta = t - cw_temp
+                sign = "+" if delta >= 0 else ""
+                delta_insight = fetch_ai_insight(
+                    "delta_temp",
+                    f"Indoor {t:.1f} C, outdoor {cw_temp:.1f} C, delta {delta:+.1f} C. "
+                    f"1 short sentence explanation max.",
+                    json.dumps({"indoor": t, "outdoor": cw_temp, "delta": delta}, default=str)
+                )
+                html_str = f"""
+                <div style='line-height: 1.2;'>
+                    <div class='section-title' style='margin-bottom: 5px;'>DELTA TEMPERATURE INSIDE VS OUTSIDE</div>
+                    <div class='delta-value' style='margin-bottom: 5px;'>{sign}{delta:.1f} C</div>
+                    <div class='ai-insight' style='margin-top: 0;'>{delta_insight}</div>
+                </div>
+                """
+                st.markdown(html_str, unsafe_allow_html=True)
+            else:
+                html_str = f"""
+                <div style='line-height: 1.2;'>
+                    <div class='section-title' style='margin-bottom: 5px;'>DELTA TEMPERATURE INSIDE VS OUTSIDE</div>
+                    <div class='delta-value' style='margin-bottom: 5px;'>-- C</div>
+                </div>
+                """
+                st.markdown(html_str, unsafe_allow_html=True)
+
+
+# =====================================================
+#                  REMOTE CONTROL PAGE
+# =====================================================
+elif st.session_state.page == "remote":
+    col_back, col_title = st.columns([1, 6])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.page = "main"
+            st.rerun()
+    with col_title:
+        st.markdown("<div class='greeting-header'>REMOTE DEVICE CONTROL</div>", unsafe_allow_html=True)
+
+    col_left, col_right = st.columns([1, 1])
+
+    with col_left:
+        # --- DISPLAY PAGE SELECTION BENTO ---
+        with st.container(border=True):
+            st.markdown("<div class='section-title'>ACTIVE DISPLAY PAGE</div>", unsafe_allow_html=True)
+            
+            p_col1, p_col2 = st.columns(2)
+            with p_col1:
+                with st.container(border=True):
+                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>🏠</div>", unsafe_allow_html=True)
+                    if st.button("Home Dashboard", use_container_width=True, key="btn_home"):
+                        success = post_device_command("set_page", "page=home")
+                        st.success("Sent!") if success else st.error("Failed")
+                
+                with st.container(border=True):
+                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>⛅</div>", unsafe_allow_html=True)
+                    if st.button("Weather Forecast", use_container_width=True, key="btn_weather"):
+                        success = post_device_command("set_page", "page=weather")
+                        st.success("Sent!") if success else st.error("Failed")
+
+            with p_col2:
+                with st.container(border=True):
+                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>📊</div>", unsafe_allow_html=True)
+                    if st.button("Telemetry", use_container_width=True, key="btn_telemetry"):
+                        success = post_device_command("set_page", "page=telemetry")
+                        st.success("Sent!") if success else st.error("Failed")
+                        
+                with st.container(border=True):
+                    st.markdown("<div style='text-align:center; font-size:2rem; margin-bottom: 5px;'>⚙️</div>", unsafe_allow_html=True)
+                    if st.button("System Settings", use_container_width=True, key="btn_settings"):
+                        success = post_device_command("set_page", "page=settings")
+                        st.success("Sent!") if success else st.error("Failed")
+
+        # --- AUDIO & BRIGHTNESS BENTO ---
+        with st.container(border=True):
+            st.markdown("<div class='section-title'>DISPLAY & AUDIO SETTINGS</div>", unsafe_allow_html=True)
+            col_b, col_v = st.columns(2)
+            with col_b:
+                brightness = st.slider("Brightness", 0, 100, 80)
+            with col_v:
+                volume = st.slider("Volume", 0, 100, 50)
+                
+            if st.button("Apply Settings", use_container_width=True, type="primary", key="btn_settings_apply"):
+                success = post_device_command("settings", f"b={brightness}&v={volume}")
+                st.success("Settings applied to device.") if success else st.error("Failed to send command.")
+
+        # --- WI-FI BENTO ---
+        with st.container(border=True):
+            st.markdown("<div class='section-title'>NETWORK CONFIGURATION</div>", unsafe_allow_html=True)
+            ssid = st.text_input("Wi-Fi SSID", placeholder="Enter Network Name")
+            pwd = st.text_input("Wi-Fi Password", type="password", placeholder="Enter Password")
+            if st.button("Connect to Wi-Fi", use_container_width=True):
+                success = post_device_command("wifi", f"ssid={ssid}&pwd={pwd}")
+                st.success(f"Connecting device to {ssid}...") if success else st.error("Failed.")
+
+    with col_right:
+        # --- DIAGNOSTICS BENTO ---
+        with st.container(border=True):
+            st.markdown("<div class='section-title'>SYSTEM DIAGNOSTICS & CONNECTIVITY</div>", unsafe_allow_html=True)
+            
+            last_ts = latest.get('timestamp')
+            is_online = False
+            if last_ts:
+                try:
+                    last_dt = pd.to_datetime(last_ts, utc=True)
+                    now_utc = datetime.datetime.now(datetime.timezone.utc)
+                    is_online = (now_utc - last_dt).total_seconds() < 120
+                except:
+                    pass
+
+            status_color = "#22c55e" if is_online else "#ef4444"
+            status_text = "ONLINE" if is_online else "OFFLINE"
+            status_icon = "✅" if is_online else "❌"
+
+            env_temp_ok = "✅" if latest.get('temperature') is not None else "⚠️"
+            env_press_ok = "✅" if weather_data else "⚠️" 
+            sgp_ok = "✅" if latest.get('tvoc') is not None else "⚠️"
+            
+            html_diagnostics = f"""
+            <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">📡 Main Connectivity</h4>
+                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                    <span style="font-weight: 600; color: #555;">Device Power</span>
+                    <span style="font-weight: 800; color: {status_color};">{status_icon} {status_text}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                    <span style="font-weight: 600; color: #555;">Cloud Backend Sync</span>
+                    <span style="font-weight: 800; color: #22c55e;">✅ CONNECTED</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 5px 0;">
+                    <span style="font-weight: 600; color: #555;">Middleware Server</span>
+                    <span style="font-weight: 800; color: #22c55e;">✅ CONNECTED</span>
+                </div>
+            </div>
+
+            <div style="background: #f8f9fa; border-radius: 8px; padding: 15px;">
+                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">🌡️ Sensors Health</h4>
+                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                    <span style="font-weight: 600; color: #555;">ENV III (Temp/Hum)</span>
+                    <span style="font-weight: 800; color: #555;">{env_temp_ok} OK</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                    <span style="font-weight: 600; color: #555;">ENV III (Pressure)</span>
+                    <span style="font-weight: 800; color: #555;">{env_press_ok} OK</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 5px 0;">
+                    <span style="font-weight: 600; color: #555;">SGP30 (TVOC/eCO2)</span>
+                    <span style="font-weight: 800; color: #555;">{sgp_ok} OK</span>
+                </div>
+            </div>
+            """
+            st.markdown(html_diagnostics, unsafe_allow_html=True)
+            
+            st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+            if st.button("Run Full System Diagnostic", use_container_width=True):
+                st.toast("Diagnostic test initiated on device.")

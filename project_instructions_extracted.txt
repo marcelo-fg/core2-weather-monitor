@@ -1,0 +1,25 @@
+<USER_REQUEST>
+oke mon m5stack ne repond plus j'ai du mal a le connecter donc retravaillons notre dashboard + remote
+
+dans un premier temps faisons un point sur ce que nous avons deja comparé a ce qui est demandé dans les consignes du projet:
+
+# **Project \- Cloud and Advanced Analytics**
+
+| Project Update (2026): As Generative AI tools become widely accessible, we expect all submissions to reflect a seamless integration of these technologies underpinned by deep human oversight. Projects that fail to demonstrate exceptional polish will be interpreted as indicative of insufficient effort and a lack of rigorous engagement with the material. Crucially, during your project presentation's Q\&A session, you must demonstrate full mastery and understanding of every line of code submitted. Inability to do so will be viewed not just as a failure to meet academic standards, but also as a fundamental misunderstanding and breach of responsible AI usage. |
+| :---- |
+
+**![][image1]**
+
+Weather affects our mood, our clothing, our interactions with people … even the stock market\! 
+
+In this project, you will implement an indoor/outdoor weather monitor with a web dashboard using [M5stack](https://m5stack.com) IoT devices and sensors. We will supply you with these devices and components, which must all be integrated in your solution (take care of them and return them in good, working condition).
+
+| [M5stack Core2](https://shop.m5stack.com/products/m5stack-core2-esp32-iot-development-kit?variant=35960244109476) IoT device![][image2] | [ENVIII sensor](https://shop.m5stack.com/products/env-iii-unit-with-temperature-humidity-air-pressure-sensor-sht30-qmp6988) (humidity & temperature) ![][image3] | [Air quality sensor](https://shop.m5stack.com/products/tvoc-eco2-gas-unit-sgp30) ![][image4] | [Motion sensor](https://shop.m5stack.com/products/pir-module)  ![][image5] |
+| :---: | :---: | :---: | :---: |
+
+You will gather both indoor measurements from the sensors and outdoor weather data from your location (a variable) using existing API
+<truncated 45216 bytes>
+uB4/FSPnDfRI6PcYWj9cE+RQ72tQNR7lH4QHadWU6TxFF/kRH3aeCgz0UOCbww5f4mkxxoN0lrCf1u4eTY8TxQ/8bbwkF/pU1cS8yhtjGn2qfIibFETqsrR/cPcPKYxxzwrXq6f4DDfoQDNhWn3QMHeUv7dIbTBDntGuepte/BYd8Fx3hpza5x1G87D5zh46nnOJ4HIw74QvtN58GAo/WJ82A7J+aHOd5ugrkXTi7dAxxvOjVSxwDRNkmS9nMw8kQZ2lCo359k5zhii/2bOLIYBxzzfSB3ftSlmI4d/R3eEeeOA476Izn9j/gfNGOxfIU4LmrffRsViuOUJ14uNj2HYsnxcUz9hOtYs77nlV+gGufgSn8WJZdoA1cdkxx6NncrnEuv+FhG7K694ebdr/3eJWaDMWPePvypr2fT3S8//PmRE9hkl+OKB1bm4HjcbxoXvnCI9Bz30Q7OpK8+7v74l6xz1I/Ugx7MsXFQ33zBPfgIbPMjOomr7ZkTYz5Kjvtxe5kf8xk51T7di9OtA5fRebDGsThDP7E2csRH8JPE2FJva2nAYUkcjFXr2X+6Zk5tI5wWxyzHz8Exh2OvOK0NOYmxyhF795vtga16Bcd9et8mDuRH7bBNddRHde7YHCOHfAQ/wjY/0o9jWuCgj7DeUvzrHJ9j6wd9m2Pxty+n6QjHrkNOek0+G1+Tt3EsTuTouj67/3Swf4CjYJqBLpaL+NCAFw5qswFBAARs399qovZStyC9fR+OJabk1O2ZYzGpnXDo3TYsT33eOy12HIuPseCAT+rPxXMAB4PE94fpD/tiaQ+T4r/i5PForM9/7Ud2z3/dR9r14oMrtelbtzgez6nnijhvfv/ncyisJ7boR3NCduxzjpMLvbvGej42f3DhtrbexCf+KzAqN3z3lpITRGNt98jxeDMnj8fsRYc5EKf0hQfsCc7d6R24MF5ZK81OYxAW3C9yLE7WsfEkTp+zIzgPUN9YR8PBOeg5KN4+z4E2GZPFboyV8wA4IT7ktLb+PIhj2ZOT2+6ta8nt8rpe5KDPnI8U7wyn2qeBI3EsrSXq0/1zZJw0dh3n7HngceocO2dxn85wdK1ofNLmddJdOQ9GnORT1yeeO3m9zXKoPprDPDebOdZWzUHsn+HYffOjHGgzDvgXCetngRPiQ4605f1Dbbl0D3AGtQRQQL6pecIxQIX7vfcX/lCmOQN/eg8JmOHQvSX5bObc5ffju28tH4nDP/1GjrclHbF75F+/Pvj8ixe+O/iMjAt3P/WA57SHtVzoX1H5GHoOjgf9cRtzukNM9dti4jzy4uX2J174lhzG7pVv/2Tvn3zDfcXhjeccjfMLX7s2+H/vx7/itt1YnNMObeDkcsU/fq609/Fp3iW+SU6ZN70H+1iHPCxw1Ef7CFV1iI8+RSe0idD+GXG0bodOtq84uQ049T6N/kYc9zPgiM5mjvrWXO5zHgSO98fxiI3x3F8+D6Y40J9zbZw0nmmOtYHIeYCMRY75WTh3gsAL3r37/RM4xbnT/CZOn5fEObvnmL/i3FExbuLk/YP7dJUTbCtxuyUOzmfgWJvbjvbpkXFEbytH6z1H6pD/4XmwgcP+0hiULXOzxqH7cp+idJx+/ww5kIeSA/2YH6rnEh/gwJmLJk0HSVC+5+tIP+p2SdLA7pPtetvI8X4UPuwvsuT1nMqO+55w7C3dl+fpvyr0+mwTOXI9Ww8znRSaULZZKld9+4bd/Z9K33WLnG9/J/7ygfUpB/mDAxljjtfYp/n1xXTR7q9f9J7Ap0J/xiNydLy9zz6WnlP9wkjtg21Ga4n66F2rXIIP23AYywKnyKnO67KPHGOlszSei3b3eLw+wGUfUW+RY4dI3j9on+vZp8/ZErcxzj
+<truncated 256222 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

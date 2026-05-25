@@ -17,5 +17,5 @@ USER appuser
 ENV PORT=8080
 EXPOSE 8080
 
-# Use Gunicorn with 2 workers for Cloud Run
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "app:app"]
+# Use Gunicorn with 1 worker and 8 threads for Cloud Run so in-memory state is shared
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "120", "app:app"]

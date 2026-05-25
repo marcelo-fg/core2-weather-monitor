@@ -9,6 +9,17 @@ A complete end-to-end IoT and Cloud project fulfilling the requirements for the 
 
 ---
 
+## 👥 Équipe et Contributions
+
+- **Marcelo Ferreira Gonçalves**
+- **Noah Issah**
+
+*(Détails des contributions à compléter)*
+
+🎥 **Lien vidéo de présentation :** [À ajouter]
+
+---
+
 ## 🏗️ Architecture (3-Tier)
 
 The system strictly adheres to a 3-tier architecture:
