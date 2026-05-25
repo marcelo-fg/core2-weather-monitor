@@ -1,0 +1,28 @@
+# =========================================================================
+# Fichiers à NE PAS committer sur git
+# =========================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Variables d'environnement & secrets ---
+# Ces fichiers contiennent des informations sensibles : jamais sur git !
+.env
+gcp-credentials.json
+
+# --- Fichiers audio (cache + tests) ---
+# Aucun .wav ne doit etre commite (cache, sorties de tests curl, etc.).
+# On garde le dossier static/audio grace au .gitkeep.
+*.wav
+
+# --- Outils de test ---
+.pytest_cache/
+.coverage
+
+# --- Système d'exploitation ---
+.DS_Store

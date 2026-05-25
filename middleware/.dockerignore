@@ -1,0 +1,9 @@
+# Ne jamais inclure les secrets ni les artefacts locaux dans l'image Cloud Run.
+.env
+*.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.DS_Store
+test_*.py

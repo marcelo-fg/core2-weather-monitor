@@ -16,7 +16,32 @@ pour le Text-to-Speech, le Speech-to-Text ET le LLM. C'est plus simple à gérer
 et à défendre à l'oral.
 """
 
+import logging
+
 import config
+
+logger = logging.getLogger(__name__)
+
+
+# Liste de modèles de REPLI. Chaque modèle a son PROPRE quota journalier gratuit
+# (le free tier de gemini-2.5-flash est très bas : ~20 req/jour). Si un modèle
+# renvoie 429 (quota dépassé), on essaie le suivant → l'assistant continue de
+# répondre au lieu de tomber en panne.
+_FALLBACK_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+]
+
+# Quand un modèle renvoie 429 (quota), on le met en "cooldown" : on le SAUTE
+# pendant un moment au lieu de le réessayer à chaque requête. Cela évite de
+# perdre du temps sur des modèles épuisés (les requêtes suivantes vont direct
+# au premier modèle qui a encore du quota).
+_MODEL_COOLDOWN = {}     # nom_modele -> timestamp jusqu'auquel on le saute
+_COOLDOWN_S = 90
+_CALL_TIMEOUT_S = 15     # plafond de temps par appel Gemini (anti-blocage)
 
 
 # Le modèle Gemini est créé "paresseusement" (lazy) : une seule fois, au
@@ -54,11 +79,66 @@ def _get_model():
     return _model
 
 
-def generate_reply(user_text):
-    """Génère une réponse intelligente (texte) à partir du texte utilisateur.
+def _format_context(context):
+    """Met en forme les données capteurs/météo en un bloc lisible pour Gemini.
 
     Paramètre :
+        context (dict | None) : mesures intérieures + météo extérieure.
+
+    Retour :
+        str : un bloc de texte (vide si aucune donnée exploitable).
+    """
+    if not context:
+        return ""
+
+    lignes = []
+    t    = context.get("temperature")
+    h    = context.get("humidity")
+    tvoc = context.get("tvoc")
+    eco2 = context.get("eco2")
+    aq   = context.get("aq_label")
+    if t    is not None: lignes.append("- Temperature interieure : {:.1f} C".format(t))
+    if h    is not None: lignes.append("- Humidite interieure : {:.0f} %".format(h))
+    if tvoc is not None: lignes.append("- COV (TVOC) : {} ppb".format(tvoc))
+    if eco2 is not None: lignes.append("- eCO2 : {} ppm".format(eco2))
+    if aq:               lignes.append("- Qualite de l'air : {}".format(aq))
+
+    ot = context.get("outdoor_temp")
+    od = context.get("outdoor_desc")
+    oh = context.get("outdoor_humidity")
+    ws = context.get("wind_speed")
+    if ot is not None: lignes.append("- Temperature exterieure : {:.1f} C".format(ot))
+    if od:             lignes.append("- Meteo exterieure : {}".format(od))
+    if oh is not None: lignes.append("- Humidite exterieure : {} %".format(oh))
+    if ws is not None: lignes.append("- Vent : {} m/s".format(ws))
+
+    # Prévisions des prochains jours (le 1er élément correspond souvent à
+    # aujourd'hui ; le suivant à demain).
+    fc = context.get("forecast")
+    if fc:
+        lignes.append("Previsions (prochains jours) :")
+        for d in fc:
+            try:
+                lignes.append("- {} {} : min {:.0f} C, max {:.0f} C, {}, pluie {} %".format(
+                    d.get("jour", ""), d.get("date", ""),
+                    d.get("min", 0), d.get("max", 0), d.get("ciel", ""),
+                    int((d.get("pluie") or 0) * 100)))
+            except Exception:
+                pass
+
+    if not lignes:
+        return ""
+    return "Donnees actuelles des capteurs et de la meteo :\n" + "\n".join(lignes)
+
+
+def generate_reply(user_text, context=None):
+    """Génère une réponse intelligente (texte) à partir du texte utilisateur.
+
+    Paramètres :
         user_text (str) : la phrase de l'utilisateur (déjà transcrite).
+        context (dict | None) : données capteurs/météo en direct. Si fournies,
+            elles sont injectées dans le prompt pour que l'assistant réponde
+            avec les vraies valeurs (température, humidité, qualité de l'air...).
 
     Retour :
         str : la réponse générée par Gemini, en français.
@@ -68,11 +148,54 @@ def generate_reply(user_text):
         une exception est levée. On la laisse remonter jusqu'à la route Flask,
         qui renverra alors un code HTTP 503.
     """
-    model = _get_model()
+    import google.generativeai as genai
+    genai.configure(api_key=config.GEMINI_API_KEY)
 
-    # On envoie le texte de l'utilisateur au modèle. Le "contexte" (message
-    # système) a déjà été donné à la création du modèle (system_instruction).
-    response = model.generate_content(user_text)
+    # On préfixe la question avec le contexte capteurs/météo si disponible.
+    bloc_contexte = _format_context(context)
+    if bloc_contexte:
+        prompt = bloc_contexte + "\n\nQuestion de l'utilisateur : " + user_text
+    else:
+        prompt = user_text
 
-    # response.text contient la réponse générée. On enlève les espaces inutiles.
-    return response.text.strip()
+    # On essaie le modèle de config en premier, puis les replis (quotas séparés).
+    modeles = [config.GEMINI_MODEL] + [m for m in _FALLBACK_MODELS if m != config.GEMINI_MODEL]
+
+    import time
+    now = time.time()
+    derniere_erreur = None
+    un_essai = False
+
+    def _essai(nom):
+        modele = genai.GenerativeModel(
+            model_name=nom,
+            system_instruction=config.LLM_SYSTEM_PROMPT,
+        )
+        # request_options timeout : plafonne chaque appel pour ne jamais bloquer.
+        return modele.generate_content(prompt, request_options={"timeout": _CALL_TIMEOUT_S})
+
+    for nom in modeles:
+        if _MODEL_COOLDOWN.get(nom, 0) > now:
+            continue                       # modèle en cooldown (quota récent) -> on saute
+        un_essai = True
+        try:
+            response = _essai(nom)
+            logger.info("Gemini OK avec le modele %s", nom)
+            return response.text.strip()
+        except Exception as e:
+            derniere_erreur = e
+            _MODEL_COOLDOWN[nom] = time.time() + _COOLDOWN_S
+            logger.warning("Gemini modele %s indisponible: %s", nom, str(e)[:140])
+            continue
+
+    # Si TOUS les modèles étaient en cooldown (aucun essayé), on retente le 1er
+    # en ignorant le cooldown — mieux qu'une panne totale.
+    if not un_essai:
+        try:
+            response = _essai(modeles[0])
+            return response.text.strip()
+        except Exception as e:
+            derniere_erreur = e
+
+    # Tous les modèles ont échoué (quota global, réseau...) -> on remonte l'erreur.
+    raise derniere_erreur if derniere_erreur else RuntimeError("Aucun modele Gemini disponible")

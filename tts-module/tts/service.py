@@ -14,39 +14,10 @@ Avantage de tout isoler ici : si un jour on change de fournisseur
 (par exemple Amazon Polly), on ne modifie QUE ce fichier.
 """
 
-import re
-
 from google.cloud import texttospeech
 
 import config
 from tts import cache
-
-
-# Expressions pré-compilées pour nettoyer le texte avant synthèse vocale.
-_MD_CHARS = re.compile(r"[*_`#~|>]+")
-_BULLETS  = re.compile(r"(?m)^\s*[-•]\s*")
-_SPACES   = re.compile(r"\s+")
-
-
-def _clean_for_tts(text):
-    """Nettoie le texte AVANT la synthèse vocale.
-
-    Pourquoi : Gemini renvoie parfois du **markdown** (astérisques, dièses,
-    puces) ou des emoji. Lus tels quels par le Text-to-Speech, ils donnent du
-    charabia ("astérisque astérisque..."). On retire donc ces symboles tout en
-    gardant les lettres accentuées et la ponctuation normale.
-    """
-    if not text:
-        return text
-    text = _MD_CHARS.sub(" ", text)
-    text = _BULLETS.sub("", text)
-    text = (text.replace("…", "...").replace("’", "'")
-                .replace("“", '"').replace("”", '"')
-                .replace("—", "-").replace("–", "-"))
-    # Retire emoji / symboles hors de la plage usuelle (garde les accents < 0x2000).
-    text = "".join(ch for ch in text if ord(ch) < 0x2000)
-    text = _SPACES.sub(" ", text).strip()
-    return text
 
 
 # Le client Google est créé "paresseusement" (lazy) : il n'est créé
@@ -133,9 +104,6 @@ def get_audio(text):
     Retour :
         bytes : le contenu WAV.
     """
-    # 0) Nettoyage du texte (retire markdown / emoji qui seraient lus à voix haute).
-    text = _clean_for_tts(text)
-
     # 1) Tentative de lecture depuis le cache.
     audio_en_cache = cache.get_cached_audio(text)
     if audio_en_cache is not None:

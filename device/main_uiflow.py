@@ -36,8 +36,8 @@ import unit
 # =============================================================================
 
 # WiFi (used by in-app switcher — UIFlow handles the initial connection)
-WIFI_SSID     = "YOUR_WIFI_SSID"  # change to "iot-unil" for in-class demo
-WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
+WIFI_SSID     = "Sunrise_Wi-Fi_6315482"   # WiFi de la maison (Noah)
+WIFI_PASSWORD = "sfk6rtdyTjMv"
 WIFI_TIMEOUT  = 30  # seconds
 IS_ONLINE     = False
 KNOWN_NETWORKS = [
@@ -202,14 +202,15 @@ def ntp_sync():
     except Exception as e:
         lcd.print("ntptime: " + str(e)[:29], lcd.CENTER, 185, COL_RED)
 
-    # ── Method 4: Middleware Time API (bulletproof fallback) ─────────────────
-    lcd.print("4) Middleware API...", lcd.CENTER, 200, COL_GRAY)
+    # ── Method 4: OpenWeatherMap (bulletproof HTTP fallback) ─────────────────
+    lcd.print("4) OpenWeatherMap API...", lcd.CENTER, 200, COL_GRAY)
     try:
-        url = MIDDLEWARE_URL + "/api/time"
+        # Re-use the existing HTTP OWM call, grab the 'dt' field
+        url = "http://api.openweathermap.org/data/2.5/weather?q={}&appid={}".format(LOCATION, OPENWEATHER_API_KEY)
         r = urequests.get(url)
         data = ujson.loads(r.content)
         r.close()
-        unix_t = data.get("unixtime", 0)
+        unix_t = data.get("dt", 0)
         if unix_t > 1600000000:
             mp_t = unix_t - 946684800
             t = utime.localtime(mp_t)
@@ -221,12 +222,12 @@ def ntp_sync():
                 rtc.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
             utime.sleep_ms(300)
             if utime.localtime()[0] > 2020:
-                lcd.print("Middleware Time OK!", lcd.CENTER, 215, COL_GREEN)
+                lcd.print("OWM Time OK!", lcd.CENTER, 215, COL_GREEN)
                 utime.sleep(1)
                 return True
-        lcd.print("Middleware Time: bad data", lcd.CENTER, 215, COL_YELLOW)
+        lcd.print("OWM Time: bad data", lcd.CENTER, 215, COL_YELLOW)
     except Exception as e:
-        lcd.print("Middleware err: " + str(e)[:24], lcd.CENTER, 215, COL_RED)
+        lcd.print("OWM err: " + str(e)[:24], lcd.CENTER, 215, COL_RED)
 
     utime.sleep(2)
     return False
@@ -613,18 +614,43 @@ def _page_voice(data):
     answer = data.get("answer", "")
     
     if voice_state == "done":
-        lcd.font(FONT_SMALL)
+        # Affichage avec retour a la ligne pour NE PAS deborder de l'ecran (320 px).
+        lcd.font(FONT_TINY)            # petite police -> ~46 caracteres par ligne
+
+        def _wrap(texte, largeur):
+            """Decoupe 'texte' en lignes de 'largeur' caracteres max, en gardant
+            les mots entiers (coupe seulement les mots plus longs que la ligne)."""
+            lignes = []
+            courante = ""
+            for mot in str(texte).split(" "):
+                while len(mot) > largeur:           # mot trop long -> coupe brute
+                    if courante:
+                        lignes.append(courante); courante = ""
+                    lignes.append(mot[:largeur]); mot = mot[largeur:]
+                if courante == "":
+                    courante = mot
+                elif len(courante) + 1 + len(mot) <= largeur:
+                    courante += " " + mot
+                else:
+                    lignes.append(courante); courante = mot
+            if courante:
+                lignes.append(courante)
+            return lignes
+
+        y = 62
+        LH = 14          # hauteur de ligne (px)
+        YMAX = 225       # on s'arrete avant le bas du cadre
+        W = 46           # caracteres par ligne (FONT_TINY ~ 6 px/car sur ~290 px)
+
         if transcript:
-            tr = str(transcript)
-            lcd.print("Vous: " + tr[:35], 15, 70, COL_WHITE)
-            if len(tr) > 35: lcd.print(tr[35:70], 15, 90, COL_WHITE)
+            for ligne in _wrap("Vous: " + str(transcript), W):
+                if y > YMAX: break
+                lcd.print(ligne, 15, y, COL_WHITE); y += LH
+            y += 4
         if answer:
-            ans = str(answer)
-            lcd.print("Robot: " + ans[:35], 15, 120, COL_GREEN)
-            if len(ans) > 35: lcd.print(ans[35:70], 15, 140, COL_GREEN)
-            if len(ans) > 70: lcd.print(ans[70:105], 15, 160, COL_GREEN)
-            if len(ans) > 105: lcd.print(ans[105:140], 15, 180, COL_GREEN)
-            if len(ans) > 140: lcd.print(ans[140:175], 15, 200, COL_GREEN)
+            for ligne in _wrap("IA: " + str(answer), W):
+                if y > YMAX: break
+                lcd.print(ligne, 15, y, COL_GREEN); y += LH
     else:
         # Show robot at the bottom center
         try:
@@ -892,7 +918,18 @@ except Exception:
 
 FICHIER_VOIX = "/flash/voix.wav"
 FICHIER_REPONSE = "/flash/reponse.wav"
+FICHIER_LOG = "/flash/debug.log"        # journal lisible via appui LONG sur le bouton A
 DUREE_ENREGISTREMENT_S = 5
+
+def log(msg):
+    """Affiche dans la console ET ajoute la ligne au journal /flash/debug.log.
+    Permet de relire les erreurs sur le M5 via un appui LONG sur le bouton A
+    (utile car UIFlow n'affiche pas les erreurs runtime une fois le code lance)."""
+    print(msg)
+    try:
+        with open(FICHIER_LOG, "a") as f:
+            f.write(str(msg) + "\n")
+    except: pass
 
 def preparer_audio():
     try:
@@ -922,15 +959,18 @@ def jouer_wav(chemin):
     except Exception as e: print("[voice] playWAV error", e)
 
 def _urlencode(s):
-    res = ""
-    for c in s:
-        if c.isalpha() or c.isdigit() or c in "-_.~": res += c
-        elif c == " ": res += "%20"
+    # Encodage pourcent CORRECT en UTF-8 : on encode chaque OCTET de la
+    # representation UTF-8 (et pas le code-point). L'ancienne version cassait
+    # les accents (e, e, a, c...) -> le serveur recevait du texte corrompu et
+    # la synthese vocale lisait du charabia. "HEX" pour mapper octet -> 2 hex.
+    HEX = "0123456789ABCDEF"
+    out = ""
+    for b in s.encode("utf-8"):
+        if (48 <= b <= 57) or (65 <= b <= 90) or (97 <= b <= 122) or b in (45, 46, 95, 126):
+            out += chr(b)            # caracteres non reserves : A-Z a-z 0-9 - . _ ~
         else:
-            h = hex(ord(c))[2:]
-            if len(h) == 1: h = "0" + h
-            res += "%" + h.upper()
-    return res
+            out += "%" + HEX[b >> 4] + HEX[b & 15]
+    return out
 
 def voice_speak(text):
     if not text: return
@@ -943,97 +983,106 @@ def voice_speak(text):
     except Exception as e:
         print("[voice] TTS Error", e)
 
-def _post_audio_stream(url, filepath):
-    import socket, ussl, os, ujson
-    if not url.startswith("https://"): raise ValueError("HTTPS only")
-    url_no_proto = url[8:]
-    slash_idx = url_no_proto.find("/")
-    host = url_no_proto[:slash_idx] if slash_idx != -1 else url_no_proto
-    path = url_no_proto[slash_idx:] if slash_idx != -1 else "/"
-    file_size = os.stat(filepath)[6]
-    
-    # Force IPv4 (AF_INET = 2) to prevent EHOSTUNREACH if IPv6 is returned
-    addr = socket.getaddrinfo(host, 443, 2)[0][-1]
-    s = socket.socket(2, 1) # AF_INET=2, SOCK_STREAM=1
-    s.settimeout(30)
-    s.connect(addr)
-    s = ussl.wrap_socket(s, server_hostname=host)
-    
-    s.write(("POST " + path + " HTTP/1.1\r\n").encode("utf-8"))
-    s.write(("Host: " + host + "\r\n").encode("utf-8"))
-    s.write(b"Content-Type: audio/wav\r\n")
-    s.write(("Content-Length: " + str(file_size) + "\r\n").encode("utf-8"))
-    s.write(b"Connection: close\r\n\r\n")
-    
-    with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(2048)
-            if not chunk: break
-            s.write(chunk)
-            
-    resp = b""
-    while True:
-        try:
-            chunk = s.read(1024)
-            if not chunk: break
-            resp += chunk
-        except Exception as e:
-            print("Read timeout or error:", e)
-            break
-    s.close()
-    
-    try:
-        body = resp.split(b"\r\n\r\n", 1)[1]
-        return ujson.loads(body)
-    except:
-        return {"error": "Invalid JSON/HTTP response: " + str(resp[:30])}
-
 def voice_listen_flow(data_dict):
     global page
     page = 4
     data_dict["voice_state"] = "listening"
     screen_render(page, data_dict, False, True)
-    
+
+    log("[C] enregistrement...")
     enregistrer_voix(FICHIER_VOIX)
-    
+
     data_dict["voice_state"] = "thinking"
     screen_render(page, data_dict, False, True)
-    
+
     try:
         import gc; gc.collect()
-        resp = _post_audio_stream(MIDDLEWARE_URL + "/api/voice/listen", FICHIER_VOIX)
-        
+        with open(FICHIER_VOIX, "rb") as f: audio_data = f.read()
+        log("[C] WAV=" + str(len(audio_data)) + " octets -> /listen")
+        r = urequests.post(MIDDLEWARE_URL + "/api/voice/listen", data=audio_data, headers={"Content-Type": "audio/wav"})
+        log("[LISTEN] status=" + str(r.status_code))
+        resp = ujson.loads(r.content)
+        r.close()
+
         if resp.get("status") == "ok":
             answer = resp.get("answer", "")
             data_dict["voice_state"] = "done"
             data_dict["transcript"] = resp.get("transcript", "")
             data_dict["answer"] = answer
+            log("[STT] " + str(resp.get("transcript", "")))
+            log("[LLM] " + str(answer)[:120])
             screen_render(page, data_dict, False, True)
-            
+
+            # Téléchargement en CHUNKS (512 o) vers /flash, puis lecture via
+            # jouer_wav (playWAV volume=100 -> son FORT).
+            # Pourquoi ce compromis :
+            #  - r2.content chargeait TOUT le WAV en RAM -> saturation (latence 2 min).
+            #  - playCloudWAV (streaming) règle la RAM MAIS joue au volume par défaut
+            #    (trop faible : sur ce firmware setVolume() est inopérant, seul le
+            #     parametre volume= de playWAV agit).
+            #  -> On lit donc le WAV par petits morceaux (RAM minimale) vers le
+            #     fichier, puis on le joue avec volume=100. Rapide ET fort.
             try:
                 gc.collect()
                 url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(answer[:200])
                 r2 = urequests.get(url)
-                if r2.status_code == 200:
-                    with open(FICHIER_REPONSE, "wb") as f2: f2.write(r2.content)
-                    r2.close()
-                    jouer_wav(FICHIER_REPONSE)
+                ok = (r2.status_code == 200)
+                if ok:
+                    recu = 0
+                    with open(FICHIER_REPONSE, "wb") as f2:
+                        while True:
+                            chunk = r2.raw.read(512)   # 512 o a la fois -> RAM minimale
+                            if not chunk:
+                                break
+                            f2.write(chunk)
+                            recu += len(chunk)
+                    log("[TTS] recu " + str(recu) + " octets (chunks)")
+                r2.close()
+                if ok:
+                    jouer_wav(FICHIER_REPONSE)         # playWAV(volume=100) -> son fort
                 else:
-                    r2.close()
+                    log("[TTS] HTTP " + str(r2.status_code))
                     voice_speak(answer)
             except Exception as e:
-                print("DL TTS error:", e)
+                log("[TTS] ERREUR DL: " + str(e))
                 voice_speak(answer)
         else:
             data_dict["voice_state"] = "done"
             data_dict["transcript"] = "Serveur Erreur"
             data_dict["answer"] = resp.get("error", "Erreur inconnue")
+            log("[LISTEN] erreur serveur: " + str(resp.get("error", "?")))
             screen_render(page, data_dict, False, True)
     except Exception as e:
         data_dict["voice_state"] = "done"
         data_dict["transcript"] = "Reseau Erreur"
         data_dict["answer"] = str(e)[:30]
+        log("[C] EXCEPTION: " + str(e))
         screen_render(page, data_dict, False, True)
+
+
+def show_debug_log():
+    """Affiche les dernieres lignes de /flash/debug.log a l'ecran (appui LONG sur A).
+    Le seul moyen de relire les erreurs sur le M5 sans cable USB."""
+    try:
+        with open(FICHIER_LOG) as f:
+            contenu = f.read()
+    except Exception as e:
+        contenu = "Pas de journal: " + str(e)
+    lcd.clear(COL_BG)
+    lcd.font(FONT_TINY)
+    # Decoupe en lignes de 52 caracteres max (pour ne pas deborder de l'ecran).
+    lignes = []
+    for brute in contenu.split("\n"):
+        if brute == "":
+            lignes.append("")
+        else:
+            for i in range(0, len(brute), 52):
+                lignes.append(brute[i:i + 52])
+    y = 4
+    for ligne in lignes[-18:]:        # les 18 dernieres lignes qui tiennent a l'ecran
+        lcd.print(ligne, 4, y, COL_WHITE)
+        y += 13
+    utime.sleep(10)                   # laisse 10 s pour lire / prendre une photo
 
 
 # =============================================================================
@@ -1202,18 +1251,14 @@ def build_display_data(indoor, weather, history, time_now,
     data["wifi_selected"] = wifi_selected
     return data
 
-def run_voice_qa(indoor, weather, history, time_now):
-    ai_context = {
-        "temperature": indoor.get("temperature"),
-        "time": time_now,
-        "outdoor_temp": weather.get("temp")
-    }
-    voice_listen_and_ask(ai_context)
-
-
 def main():
     # ── Init ────────────────────────────────────────────────────────────────
     lcd.clear(COL_BG)
+    # Journal vierge a chaque demarrage (lisible via appui LONG sur A).
+    try:
+        with open(FICHIER_LOG, "w") as f:
+            f.write("=== DEBUG LOG ===\n")
+    except: pass
     sensors_init()
 
     page          = 0
@@ -1299,15 +1344,25 @@ def main():
     last_interaction = utime.time()
     is_standby = False
     last_pir_state = 0
-    
+    a_press_start = 0     # instant (ticks_ms) du debut d'appui sur A (0 = relache)
+
     while True:
         now = utime.time()
 
         # Buffered hardware buttons (catches presses even during HTTP blocks)
         try:
-            if btnA.wasPressed():
+            # Bouton A : appui COURT = page precedente ; appui LONG (>=1.5s) = JOURNAL DEBUG
+            if btnA.isPressed():
+                if a_press_start == 0:
+                    a_press_start = utime.ticks_ms()
+            elif a_press_start != 0:
+                held = utime.ticks_diff(utime.ticks_ms(), a_press_start)
+                a_press_start = 0
                 last_interaction = now
-                page = (page - 1) % NUM_PAGES
+                if held >= 1500:
+                    show_debug_log()
+                else:
+                    page = (page - 1) % NUM_PAGES
                 screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
             elif btnC.wasPressed():
                 last_interaction = now

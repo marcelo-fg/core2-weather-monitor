@@ -2,6 +2,7 @@
 BigQuery service — handles all database operations.
 """
 import logging
+import time
 from datetime import datetime, timezone
 from google.cloud import bigquery
 from config import GOOGLE_CLOUD_PROJECT, BIGQUERY_DATASET, BIGQUERY_TABLE
@@ -9,6 +10,11 @@ from config import GOOGLE_CLOUD_PROJECT, BIGQUERY_DATASET, BIGQUERY_TABLE
 logger = logging.getLogger(__name__)
 
 _client = None
+
+# Petit cache (TTL) de la dernière mesure : le M5 n'envoie une mesure que toutes
+# les ~5 min, donc inutile de requêter BigQuery à chaque requête vocale.
+_LATEST_CACHE = {"ts": 0.0, "value": None}
+_LATEST_TTL = 30
 
 
 def _get_client():
@@ -94,7 +100,10 @@ def insert_reading(reading: dict) -> bool:
 
 
 def get_latest_reading() -> dict | None:
-    """Return the most recent sensor reading."""
+    """Return the most recent sensor reading (mis en cache 30 s)."""
+    if (time.time() - _LATEST_CACHE["ts"]) < _LATEST_TTL:
+        return _LATEST_CACHE["value"]
+
     client = _get_client()
     query = f"""
         SELECT *
@@ -105,9 +114,10 @@ def get_latest_reading() -> dict | None:
     """
     try:
         rows = list(client.query(query).result())
-        if rows:
-            return dict(rows[0])
-        return None
+        result = dict(rows[0]) if rows else None
+        _LATEST_CACHE["ts"] = time.time()
+        _LATEST_CACHE["value"] = result
+        return result
     except Exception as e:
         logger.error(f"BigQuery query error: {e}")
         return None

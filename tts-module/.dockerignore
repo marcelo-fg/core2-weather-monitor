@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+gcp-credentials.json
+.env
+.gitignore
+README.md
+*.wav

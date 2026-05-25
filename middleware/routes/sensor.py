@@ -22,7 +22,8 @@ def post_sensor():
     try:
         w = get_full_weather("Lausanne,CH")
         c = w.get("current", {})
-        data["outdoor_temp"] = c.get("temperature")
+        # get_current() renvoie la clé "temp" (pas "temperature") -> bug corrigé.
+        data["outdoor_temp"] = c.get("temp")
         data["outdoor_humidity"] = c.get("humidity")
         data["outdoor_wind"] = c.get("wind_speed")
         data["outdoor_desc"] = c.get("condition")
@@ -145,31 +146,21 @@ def get_sensor_history_weekly():
 
     weekly_bars = []
     days_names = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-    
-    # Dummy realistic data for empty days
-    import random
-    
+
+    # Données RÉELLES uniquement. Les jours sans mesure sont à 0 (le firmware
+    # affiche alors une barre minimale) — pas de données fabriquées.
     for i in range(7):
         b = day_buckets[i]
-        if b["in"]:
-            avg_in = sum(b["in"]) / len(b["in"])
-        else:
-            avg_in = 22.0 + random.uniform(-1.5, 1.5)
-            
-        if b["out"]:
-            avg_out = sum(b["out"]) / len(b["out"])
-        else:
-            avg_out = 16.0 + random.uniform(-3.0, 3.0)
-            
+        avg_in  = sum(b["in"])  / len(b["in"])  if b["in"]  else 0
+        avg_out = sum(b["out"]) / len(b["out"]) if b["out"] else 0
         weekly_bars.append({
             "day": days_names[i],
             "in": avg_in,
             "out": avg_out
         })
-        
-    avg_humidity = sum(humidity_list) / len(humidity_list) if humidity_list else 48.0
-    if alerts_count == 0: alerts_count = 3  # Dummy alerts for presentation
-    
+
+    avg_humidity = sum(humidity_list) / len(humidity_list) if humidity_list else 0
+
     data = {
         "bars": weekly_bars,
         "humidity": int(avg_humidity),

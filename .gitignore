@@ -12,6 +12,8 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.venv-middleware/
+.venv-dashboard/
 venv/
 env/
 test_env/
@@ -24,3 +26,4 @@ test_env/
 *-service-account*.json
 credentials*.json
 env-vars.yaml
+application_default_credentials.json

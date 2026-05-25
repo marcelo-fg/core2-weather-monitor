@@ -2,12 +2,30 @@
 OpenWeatherMap service — fetches current weather and 5-day forecast.
 """
 import logging
+import time
 import requests
 from config import OPENWEATHER_API_KEY, DEFAULT_LOCATION
 
 logger = logging.getLogger(__name__)
 
 OWM_BASE = "https://api.openweathermap.org/data/2.5"
+
+# Cache mémoire (TTL) : la météo change lentement. On évite ainsi de rappeler
+# OpenWeather à chaque requête vocale (qui appelle current + forecast), ce qui
+# réduit nettement la latence. 300 s = 5 min.
+_WEATHER_CACHE = {}
+_WEATHER_TTL = 300
+
+
+def _cache_get(key):
+    e = _WEATHER_CACHE.get(key)
+    if e and (time.time() - e[0]) < _WEATHER_TTL:
+        return e[1]
+    return None
+
+
+def _cache_put(key, value):
+    _WEATHER_CACHE[key] = (time.time(), value)
 
 
 def _get(endpoint: str, params: dict) -> dict | None:
@@ -26,13 +44,16 @@ def _get(endpoint: str, params: dict) -> dict | None:
 
 
 def get_current(location: str = None) -> dict | None:
-    """Return current weather for a location."""
+    """Return current weather for a location (mis en cache 5 min)."""
     loc = location or DEFAULT_LOCATION
+    cached = _cache_get(("current", loc))
+    if cached is not None:
+        return cached
     data = _get("weather", {"q": loc})
     if data is None:
         return None
     try:
-        return {
+        result = {
             "temp":        data["main"]["temp"],
             "feels_like":  data["main"]["feels_like"],
             "humidity":    data["main"]["humidity"],
@@ -46,11 +67,16 @@ def get_current(location: str = None) -> dict | None:
     except (KeyError, IndexError) as e:
         logger.error(f"OWM parse error: {e}")
         return None
+    _cache_put(("current", loc), result)
+    return result
 
 
 def get_forecast(location: str = None) -> dict:
-    """Return 5-day daily forecast and next 5 3-hour blocks."""
+    """Return 5-day daily forecast and next 5 3-hour blocks (mis en cache 5 min)."""
     loc = location or DEFAULT_LOCATION
+    cached = _cache_get(("forecast", loc))
+    if cached is not None:
+        return cached
     data = _get("forecast", {"q": loc, "cnt": 40})
     if data is None:
         return {"daily": [], "hourly": []}
@@ -126,7 +152,9 @@ def get_forecast(location: str = None) -> dict:
         if len(result) >= 8:
             break
             
-    return {"daily": result, "hourly": hourly}
+    out = {"daily": result, "hourly": hourly}
+    _cache_put(("forecast", loc), out)
+    return out
 
 
 def get_full_weather(location: str = None) -> dict:

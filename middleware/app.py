@@ -51,12 +51,16 @@ def create_app() -> Flask:
                 "POST /api/sensor",
                 "GET  /api/sensor/latest",
                 "GET  /api/sensor/history?hours=24",
+                "GET  /api/sensor/history_weekly",
                 "GET  /api/weather?location=Lausanne,CH",
                 "GET  /api/weather/current",
                 "GET  /api/weather/forecast",
-                "POST /api/voice/tts",
+                "GET  /api/voice/tts.wav?text=...",
                 "POST /api/voice/query",
+                "POST /api/voice/listen",
                 "POST /api/voice/announce",
+                "GET  /api/device/sync",
+                "POST /api/device/command",
             ],
         }), 200
 

@@ -1,0 +1,27 @@
+# Dépendances Python du module Text-to-Speech.
+# Installation :  pip install -r requirements.txt
+#
+# On utilise des plages de versions ("compatible release") plutôt que des
+# versions figées : c'est plus robuste tout en évitant des changements majeurs.
+
+# --- Framework web ---
+Flask>=3.0,<4.0
+
+# --- API Google Cloud Text-to-Speech (texte -> voix) ---
+google-cloud-texttospeech>=2.16,<3.0
+
+# --- API Google Cloud Speech-to-Text (voix -> texte, endpoint /listen) ---
+google-cloud-speech>=2.21,<3.0
+
+# --- API Google Gemini (le "cerveau" du mode conversation, endpoint /listen) ---
+# S'authentifie avec les mêmes credentials Google (GOOGLE_APPLICATION_CREDENTIALS).
+google-generativeai>=0.7,<1.0
+
+# --- Serveur de production (utilisé sur Cloud Run via le Dockerfile) ---
+gunicorn>=22.0
+
+# --- Chargement automatique du fichier .env en local ---
+python-dotenv>=1.0
+
+# --- Tests automatiques ---
+pytest>=8.0

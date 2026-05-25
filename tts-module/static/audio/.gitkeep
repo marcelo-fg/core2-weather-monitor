@@ -1,0 +1,3 @@
+# Ce fichier vide existe uniquement pour que git conserve le dossier
+# "static/audio/" (git ne suit pas les dossiers vides).
+# Les fichiers .wav générés à l'intérieur sont ignorés (voir .gitignore).

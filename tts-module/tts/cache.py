@@ -66,22 +66,14 @@ def save_audio(text, audio_bytes):
         audio_bytes (bytes): le contenu binaire du WAV à sauvegarder.
 
     Retour :
-        str | None : le chemin du fichier créé, ou None si l'écriture a échoué.
-
-    IMPORTANT : le cache n'est qu'une OPTIMISATION. Si le dossier n'est pas
-    inscriptible (ex. Cloud Run tourne en utilisateur non-root et /app est en
-    lecture seule), on NE doit PAS casser la synthèse vocale. On capture donc
-    l'erreur et on renvoie None : l'appelant a déjà les octets audio.
+        str : le chemin du fichier créé.
     """
-    try:
-        # On s'assure que le dossier de cache existe (création récursive si besoin).
-        # exist_ok=True : pas d'erreur si le dossier existe déjà.
-        os.makedirs(config.AUDIO_CACHE_DIR, exist_ok=True)
+    # On s'assure que le dossier de cache existe (création récursive si besoin).
+    # exist_ok=True : pas d'erreur si le dossier existe déjà.
+    os.makedirs(config.AUDIO_CACHE_DIR, exist_ok=True)
 
-        chemin = _text_to_filename(text)
-        with open(chemin, "wb") as f:  # "wb" = écriture binaire (audio)
-            f.write(audio_bytes)
-        return chemin
-    except Exception:
-        # Cache non inscriptible : tant pis, on continue sans cache.
-        return None
+    chemin = _text_to_filename(text)
+    with open(chemin, "wb") as f:  # "wb" = écriture binaire (audio)
+        f.write(audio_bytes)
+
+    return chemin
