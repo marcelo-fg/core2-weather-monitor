@@ -28,7 +28,7 @@ TTS_VOICE_NAME       = os.environ.get("TTS_VOICE_NAME", "fr-FR-Wavenet-C")
 TTS_SPEAKING_RATE    = float(os.environ.get("TTS_SPEAKING_RATE", "1.0"))
 TTS_PITCH            = float(os.environ.get("TTS_PITCH", "0.0"))
 TTS_SAMPLE_RATE_HZ   = int(os.environ.get("TTS_SAMPLE_RATE_HZ", "24000"))
-AUDIO_CACHE_DIR      = os.environ.get("AUDIO_CACHE_DIR", "static/audio")
+AUDIO_CACHE_DIR      = os.environ.get("AUDIO_CACHE_DIR", "/tmp/audio_cache")
 RATE_LIMIT_SECONDS   = int(os.environ.get("RATE_LIMIT_SECONDS", "3600"))
 
 # STT
