@@ -51,6 +51,9 @@ div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
 div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div.element-container {
     flex-grow: 1; display: flex; flex-direction: column;
 }
+div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div.element-container > div {
+    flex-grow: 1; display: flex; flex-direction: column;
+}
 div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div.element-container [data-testid="stVerticalBlockBorderWrapper"] {
     flex-grow: 1;
 }
@@ -524,76 +527,90 @@ if st.session_state.page == "main":
             else:
                 st.info("No hourly forecast available.")
 
-    # ---- BOTTOM ROW ----
-    bot_left, bot_right = st.columns(2)
+    # ---- BOTTOM ROW — CSS Grid for guaranteed equal height ----
+    GLASS = ("background:rgba(255,255,255,0.07);backdrop-filter:blur(16px);"
+             "-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.12);"
+             "border-radius:20px;padding:20px 24px;"
+             "box-shadow:0 4px 28px rgba(0,0,0,0.35),inset 0 1px 0 rgba(255,255,255,0.07);")
+    STITLE = "font-size:0.68rem;font-weight:700;color:rgba(255,255,255,0.38);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;"
+    AITEXT = "font-style:italic;color:rgba(255,255,255,0.4);font-size:0.82rem;line-height:1.55;margin-top:6px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;"
 
-    with bot_left:
-        with st.container(border=True, height=280):
-            st.markdown("<div class='section-title'>5-DAY FORECAST</div>", unsafe_allow_html=True)
-            if daily_forecast:
-                days   = daily_forecast[:5]
-                g_min  = min(d.get('temp_min', 0)  for d in days)
-                g_max  = max(d.get('temp_max', 10) for d in days)
-                span   = max(g_max - g_min, 1)
-                for i, day in enumerate(days):
-                    dn = "TODAY" if i == 0 else day.get('day_name', '')[:3].upper()
-                    ic = icon_to_emoji(day.get('icon', '01d'))
-                    mn = day.get('temp_min', 0)
-                    mx = day.get('temp_max', 0)
-                    lp = (mn - g_min) / span * 100
-                    wp = max((mx - mn) / span * 100, 8)
-                    st.markdown(f"""<div class='forecast-row'>
-                        <div class='forecast-day'>{dn}</div>
-                        <div class='forecast-icon'>{ic}</div>
-                        <div class='forecast-min'>{int(mn)}°</div>
-                        <div class='forecast-bar-bg'><div class='forecast-bar-fill' style='left:{lp:.1f}%;width:{wp:.1f}%;'></div></div>
-                        <div class='forecast-max'>{int(mx)}°</div>
-                    </div>""", unsafe_allow_html=True)
-            else:
-                st.info("No forecast data available.")
-
-    with bot_right:
-        with st.container(border=True, height=132):
-            aq_full, aq_col = get_aq_level(v, e)
-            aq_pct = 33 if aq_full == "GOOD" else (66 if aq_full == "MODERATE" else 100)
-            air_insight = fetch_ai_insight(
-                "air_quality",
-                f"Indoor TVOC={v}ppb, eCO2={e}ppm. Level: {aq_full}. 1 short sentence analysis max.",
-                json.dumps({"tvoc": v, "eco2": e}, default=str)
+    # Forecast rows
+    forecast_inner = ""
+    if daily_forecast:
+        days  = daily_forecast[:5]
+        g_min = min(d.get('temp_min', 0)  for d in days)
+        g_max = max(d.get('temp_max', 10) for d in days)
+        span  = max(g_max - g_min, 1)
+        for i, day in enumerate(days):
+            dn = "TODAY" if i == 0 else day.get('day_name', '')[:3].upper()
+            ic = icon_to_emoji(day.get('icon', '01d'))
+            mn, mx = day.get('temp_min', 0), day.get('temp_max', 0)
+            lp = (mn - g_min) / span * 100
+            wp = max((mx - mn) / span * 100, 8)
+            forecast_inner += (
+                f"<div class='forecast-row'>"
+                f"<div class='forecast-day'>{dn}</div>"
+                f"<div class='forecast-icon'>{ic}</div>"
+                f"<div class='forecast-min'>{int(mn)}&deg;</div>"
+                f"<div class='forecast-bar-bg'><div class='forecast-bar-fill' style='left:{lp:.1f}%;width:{wp:.1f}%;'></div></div>"
+                f"<div class='forecast-max'>{int(mx)}&deg;</div>"
+                f"</div>"
             )
-            st.markdown(f"""
-            <div>
-                <div class='section-title'>AIR POLLUTION</div>
-                <div style='font-size:1.7rem; font-weight:900; color:{aq_col};'>{aq_full}</div>
-                <div class='aq-bar'><div class='aq-bar-fill' style='width:{aq_pct}%; background:{aq_col};'></div></div>
-                <div class='ai-insight'>{air_insight}</div>
-            </div>
-            """, unsafe_allow_html=True)
+    else:
+        forecast_inner = "<p style='color:rgba(255,255,255,0.4)'>No forecast data.</p>"
 
-        with st.container(border=True, height=132):
-            if t is not None and cw_temp is not None:
-                delta = t - cw_temp
-                sign  = "+" if delta >= 0 else ""
-                delta_color = "#f87171" if delta > 3 else ("#4facfe" if delta < -3 else "rgba(255,255,255,0.75)")
-                delta_insight = fetch_ai_insight(
-                    "delta_temp",
-                    f"Indoor {t:.1f}°C, outdoor {cw_temp:.1f}°C, delta {delta:+.1f}°C. 1 short sentence max.",
-                    json.dumps({"indoor": t, "outdoor": cw_temp, "delta": delta}, default=str)
-                )
-                st.markdown(f"""
-                <div>
-                    <div class='section-title'>ΔT INSIDE vs OUTSIDE</div>
-                    <div class='delta-value' style='color:{delta_color};'>{sign}{delta:.1f}°C</div>
-                    <div class='ai-insight'>{delta_insight}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div>
-                    <div class='section-title'>ΔT INSIDE vs OUTSIDE</div>
-                    <div class='delta-value' style='color:rgba(255,255,255,0.25);'>-- °C</div>
-                </div>
-                """, unsafe_allow_html=True)
+    # Air quality
+    aq_full, aq_col = get_aq_level(v, e)
+    aq_pct = 33 if aq_full == "GOOD" else (66 if aq_full == "MODERATE" else 100)
+    air_insight = fetch_ai_insight(
+        "air_quality",
+        f"Indoor TVOC={v}ppb, eCO2={e}ppm. Level: {aq_full}. 1 short sentence analysis max.",
+        json.dumps({"tvoc": v, "eco2": e}, default=str)
+    )
+
+    # Delta temperature
+    if t is not None and cw_temp is not None:
+        delta = t - cw_temp
+        sign  = "+" if delta >= 0 else ""
+        delta_color = "#f87171" if delta > 3 else ("#4facfe" if delta < -3 else "rgba(255,255,255,0.75)")
+        delta_insight = fetch_ai_insight(
+            "delta_temp",
+            f"Indoor {t:.1f}C, outdoor {cw_temp:.1f}C, delta {delta:+.1f}C. 1 short sentence max.",
+            json.dumps({"indoor": t, "outdoor": cw_temp, "delta": delta}, default=str)
+        )
+        delta_val   = f"{sign}{delta:.1f}&deg;C"
+        delta_clr   = delta_color
+        delta_extra = f"<div style='{AITEXT}'>{delta_insight}</div>"
+    else:
+        delta_val   = "-- &deg;C"
+        delta_clr   = "rgba(255,255,255,0.25)"
+        delta_extra = ""
+
+    parts = [
+        f"<div style='{GLASS}'>",
+        f"<div style='{STITLE}'>5-DAY FORECAST</div>",
+        forecast_inner,
+        "</div>",
+        f"<div style='{GLASS}'>",
+        f"<div style='{STITLE}'>AIR POLLUTION</div>",
+        f"<div style='font-size:1.7rem;font-weight:900;color:{aq_col};'>{aq_full}</div>",
+        f"<div style='height:7px;background:rgba(255,255,255,0.1);border-radius:4px;margin:7px 0 10px 0;'>"
+        f"<div style='height:100%;border-radius:4px;width:{aq_pct}%;background:{aq_col};'></div></div>",
+        f"<div style='{AITEXT}'>{air_insight}</div>",
+        "<div style='border-top:1px solid rgba(255,255,255,0.08);margin:14px 0;'></div>",
+        f"<div style='{STITLE}'>DELTA T INSIDE vs OUTSIDE</div>",
+        f"<div style='font-size:2.6rem;font-weight:900;letter-spacing:-1px;margin:4px 0 6px 0;color:{delta_clr};'>{delta_val}</div>",
+        delta_extra,
+        "</div>",
+    ]
+
+    st.markdown(
+        f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;'>"
+        + "".join(parts)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # =====================================================
