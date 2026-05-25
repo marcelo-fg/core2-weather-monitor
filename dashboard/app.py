@@ -353,15 +353,12 @@ if st.session_state.page == "main":
             pass
 
     # ---- HEADER ----
-    hdr_left, hdr_toggle, hdr_btn = st.columns([6, 2, 1])
+    hdr_left, hdr_btn = st.columns([9, 1])
     with hdr_left:
         st.markdown(f"""
         <div class='greeting-header'>{greeting}</div>
         <div class='greeting-date'>{date_str}</div>
         """, unsafe_allow_html=True)
-    with hdr_toggle:
-        st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
-        tele_view = st.radio("View", ["INDOOR", "OUTDOOR"], horizontal=True, label_visibility="collapsed")
     with hdr_btn:
         st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
         if st.button("REMOTE", use_container_width=True):
@@ -369,6 +366,9 @@ if st.session_state.page == "main":
             st.rerun()
 
     # ---- METRIC CARDS ----
+    tog_col, _ = st.columns([2, 7])
+    with tog_col:
+        tele_view = st.radio("View", ["INDOOR", "OUTDOOR"], horizontal=True, label_visibility="collapsed")
     if tele_view == "INDOOR":
         cards = [
             ("TEMPERATURE", temp_str, "#fbbf24"),
