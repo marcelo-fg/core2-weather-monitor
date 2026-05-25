@@ -952,8 +952,9 @@ def _post_audio_stream(url, filepath):
     path = url_no_proto[slash_idx:] if slash_idx != -1 else "/"
     file_size = os.stat(filepath)[6]
     
-    addr = socket.getaddrinfo(host, 443)[0][-1]
-    s = socket.socket()
+    # Force IPv4 (AF_INET = 2) to prevent EHOSTUNREACH if IPv6 is returned
+    addr = socket.getaddrinfo(host, 443, 2)[0][-1]
+    s = socket.socket(2, 1) # AF_INET=2, SOCK_STREAM=1
     s.settimeout(30)
     s.connect(addr)
     s = ussl.wrap_socket(s, server_hostname=host)
