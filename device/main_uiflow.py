@@ -958,10 +958,10 @@ def _post_audio_stream(url, filepath):
     s.connect(addr)
     s = ussl.wrap_socket(s, server_hostname=host)
     
-    s.write(f"POST {path} HTTP/1.1\r\n".encode("utf-8"))
-    s.write(f"Host: {host}\r\n".encode("utf-8"))
+    s.write(("POST " + path + " HTTP/1.1\r\n").encode("utf-8"))
+    s.write(("Host: " + host + "\r\n").encode("utf-8"))
     s.write(b"Content-Type: audio/wav\r\n")
-    s.write(f"Content-Length: {file_size}\r\n".encode("utf-8"))
+    s.write(("Content-Length: " + str(file_size) + "\r\n").encode("utf-8"))
     s.write(b"Connection: close\r\n\r\n")
     
     with open(filepath, "rb") as f:
