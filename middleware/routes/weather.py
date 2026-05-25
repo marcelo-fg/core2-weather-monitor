@@ -7,6 +7,12 @@ from services.weather_service import get_full_weather, get_current, get_forecast
 weather_bp = Blueprint("weather", __name__)
 
 
+@weather_bp.route("/api/time", methods=["GET"])
+def get_time():
+    """Return the current UTC timestamp for the device to sync its clock."""
+    import time
+    return jsonify({"status": "ok", "unixtime": int(time.time())}), 200
+
 @weather_bp.route("/api/weather", methods=["GET"])
 def weather():
     """
