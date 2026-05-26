@@ -1544,6 +1544,8 @@ def main():
                         voice_listen_flow(build_display_data(indoor, weather, history, ntp_now()))
             last_poll = now
 
+        import gc
+        gc.collect()
         utime.sleep_ms(20)
 
 try:
