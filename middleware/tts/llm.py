@@ -97,29 +97,28 @@ def _format_context(context):
     tvoc = context.get("tvoc")
     eco2 = context.get("eco2")
     aq   = context.get("aq_label")
-    if t    is not None: lignes.append("- Temperature interieure : {:.1f} C".format(t))
-    if h    is not None: lignes.append("- Humidite interieure : {:.0f} %".format(h))
-    if tvoc is not None: lignes.append("- COV (TVOC) : {} ppb".format(tvoc))
+    if t    is not None: lignes.append("- Indoor temperature : {:.1f} C".format(t))
+    if h    is not None: lignes.append("- Indoor humidity : {:.0f} %".format(h))
+    if tvoc is not None: lignes.append("- VOC (TVOC) : {} ppb".format(tvoc))
     if eco2 is not None: lignes.append("- eCO2 : {} ppm".format(eco2))
-    if aq:               lignes.append("- Qualite de l'air : {}".format(aq))
+    if aq:               lignes.append("- Air quality : {}".format(aq))
 
     ot = context.get("outdoor_temp")
     od = context.get("outdoor_desc")
     oh = context.get("outdoor_humidity")
     ws = context.get("wind_speed")
-    if ot is not None: lignes.append("- Temperature exterieure : {:.1f} C".format(ot))
-    if od:             lignes.append("- Meteo exterieure : {}".format(od))
-    if oh is not None: lignes.append("- Humidite exterieure : {} %".format(oh))
-    if ws is not None: lignes.append("- Vent : {} m/s".format(ws))
+    if ot is not None: lignes.append("- Outdoor temperature : {:.1f} C".format(ot))
+    if od:             lignes.append("- Outdoor weather : {}".format(od))
+    if oh is not None: lignes.append("- Outdoor humidity : {} %".format(oh))
+    if ws is not None: lignes.append("- Wind : {} m/s".format(ws))
 
-    # Prévisions des prochains jours (le 1er élément correspond souvent à
-    # aujourd'hui ; le suivant à demain).
+    # Forecast
     fc = context.get("forecast")
     if fc:
-        lignes.append("Previsions (prochains jours) :")
+        lignes.append("Forecast (next few days) :")
         for d in fc:
             try:
-                lignes.append("- {} {} : min {:.0f} C, max {:.0f} C, {}, pluie {} %".format(
+                lignes.append("- {} {} : min {:.0f} C, max {:.0f} C, {}, rain {} %".format(
                     d.get("jour", ""), d.get("date", ""),
                     d.get("min", 0), d.get("max", 0), d.get("ciel", ""),
                     int((d.get("pluie") or 0) * 100)))
@@ -128,7 +127,7 @@ def _format_context(context):
 
     if not lignes:
         return ""
-    return "Donnees actuelles des capteurs et de la meteo :\n" + "\n".join(lignes)
+    return "Current sensor and weather data :\n" + "\n".join(lignes)
 
 
 def generate_reply(user_text, context=None):
@@ -154,7 +153,7 @@ def generate_reply(user_text, context=None):
     # On préfixe la question avec le contexte capteurs/météo si disponible.
     bloc_contexte = _format_context(context)
     if bloc_contexte:
-        prompt = bloc_contexte + "\n\nQuestion de l'utilisateur : " + user_text
+        prompt = bloc_contexte + "\n\nUser Question : " + user_text
     else:
         prompt = user_text
 

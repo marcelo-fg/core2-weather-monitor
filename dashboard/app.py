@@ -221,16 +221,17 @@ def fetch_weather():
 def fetch_ai_insight(prompt_key, prompt_text, context_str):
     try:
         context = json.loads(context_str)
-        result = ask_llm(prompt_text, context)
+        # Force English response unconditionally
+        full_prompt = prompt_text + " IMPORTANT: Answer in English only."
+        result = ask_llm(full_prompt, context)
         if result:
             import re
-            result = re.sub(r'Ici Orion.*?(station\.|bord\.|Commandant\.)', '', result, flags=re.IGNORECASE|re.DOTALL)
-            result = re.sub(r'J\'analyse les données.*?\.', '', result, flags=re.IGNORECASE)
-            result = re.sub(r'Je suis chargé de vous fournir.*?\.', '', result, flags=re.IGNORECASE)
-            result = re.sub(r'Ma mission est de vous tenir.*?\.', '', result, flags=re.IGNORECASE)
-            result = re.sub(r'Commandant,\s*voici.*?:', '', result, flags=re.IGNORECASE)
-            result = re.sub(r'Mon conseil.*?:', '', result, flags=re.IGNORECASE)
-            result = result.replace("Commandant,", "").replace("Commandant.", "").replace("Commandant", "").strip()
+            result = re.sub(r'(?i)This is Orion.*?(station|board|Commander)\.?', '', result, flags=re.DOTALL)
+            result = re.sub(r'(?i)I am analyzing the data.*?\.', '', result)
+            result = re.sub(r'(?i)My mission is to.*?\.', '', result)
+            result = re.sub(r'(?i)Commander,\s*here is.*?:', '', result)
+            result = re.sub(r'(?i)My advice.*?:', '', result)
+            result = result.replace("Commander,", "").replace("Commander.", "").replace("Commander", "").strip()
             return result
         return "AI analysis temporarily unavailable."
     except Exception as e:

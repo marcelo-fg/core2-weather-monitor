@@ -62,46 +62,46 @@ def build_announcement_text(event_type, data=None):
     if data is None:
         data = FAKE_WEATHER_DATA
 
-    # --- Résumé matinal -----------------------------------------------------
+    # --- Morning briefing -----------------------------------------------------
     if event_type == "morning_briefing":
         texte = (
-            "Bonjour ! Voici votre résumé matinal. "
-            "La température extérieure est de {temp} degrés."
-        ).format(temp=data.get("temp", "inconnue"))
+            "Good morning! Here is your daily briefing. "
+            "The outdoor temperature is {temp} degrees."
+        ).format(temp=data.get("temp", "unknown"))
 
-        # Rappel parapluie UNIQUEMENT si de la pluie est prévue.
+        # Umbrella reminder ONLY if rain is predicted.
         if data.get("rain"):
             texte += (
-                " De la pluie est prévue aujourd'hui, "
-                "pensez à prendre un parapluie."
+                " Rain is expected today, "
+                "don't forget to take an umbrella."
             )
         return texte
 
-    # --- Alerte humidité intérieure ----------------------------------------
+    # --- Indoor humidity alert ----------------------------------------
     if event_type == "humidity_alert":
-        humidite = data.get("humidity", "inconnue")
+        humidite = data.get("humidity", "unknown")
         return (
-            "Attention, l'humidité intérieure est faible, "
-            "à seulement {h} pour cent. "
-            "Pensez à aérer ou à utiliser un humidificateur."
+            "Warning, indoor humidity is low, "
+            "at only {h} percent. "
+            "Consider ventilating or using a humidifier."
         ).format(h=humidite)
 
-    # --- Alerte qualité de l'air -------------------------------------------
+    # --- Air quality alert -------------------------------------------
     if event_type == "air_quality_alert":
         return (
-            "Attention, la qualité de l'air intérieur est mauvaise. "
-            "Il est recommandé d'ouvrir les fenêtres pour aérer la pièce."
+            "Warning, indoor air quality is poor. "
+            "It is recommended to open the windows to ventilate the room."
         )
 
-    # --- Message de bienvenue ----------------------------------------------
+    # --- Welcome message ----------------------------------------------
     if event_type == "welcome":
-        return "Bienvenue à la maison ! Content de vous revoir."
+        return "Welcome home! Nice to see you again."
 
-    # --- Météo actuelle ----------------------------------------------------
+    # --- Current weather ----------------------------------------------------
     if event_type == "weather_update":
         return (
-            "Météo actuelle : il fait {temp} degrés à l'extérieur."
-        ).format(temp=data.get("temp", "inconnue"))
+            "Current weather: it is {temp} degrees outside."
+        ).format(temp=data.get("temp", "unknown"))
 
     # Si on arrive ici, c'est que l'event_type n'est pas dans la liste.
     raise ValueError("Type d'événement inconnu : " + str(event_type))
