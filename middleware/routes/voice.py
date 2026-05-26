@@ -209,3 +209,24 @@ def listen():
         "answer": reponse_texte
     }), 200
 
+@voice_bp.route("/api/voice/stt_only", methods=["POST"])
+def stt_only():
+    """
+    STT mode only: receives audio bytes, returns JSON with transcript.
+    Used by Streamlit dashboard audio_input.
+    """
+    if "audio" in request.files:
+        audio_bytes = request.files["audio"].read()
+    else:
+        audio_bytes = request.get_data()
+
+    if not audio_bytes:
+        return jsonify({"error": "Aucun audio reçu."}), 400
+
+    try:
+        transcription = stt.transcribe_wav(audio_bytes)
+        return jsonify({"status": "ok", "text": transcription}), 200
+    except Exception as e:
+        logger.error(f"STT Error: {e}")
+        return jsonify({"error": f"Service de transcription indisponible: {e}"}), 503
+
