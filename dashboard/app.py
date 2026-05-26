@@ -653,28 +653,28 @@ elif st.session_state.page == "remote":
 
         if prompt:
             user_text = prompt
-                st.session_state.chat_history.append({"role": "user", "content": user_text})
-                # Re-render new message
-                with chat_container:
-                    with st.chat_message("user"):
-                        st.markdown(user_text)
-                        
-                # AI Response
-                context = {
-                    "temperature": latest.get("temperature"),
-                    "humidity": latest.get("humidity"),
-                    "tvoc": latest.get("tvoc"),
-                    "eco2": latest.get("eco2"),
-                    "aq_label": latest.get("aq_label"),
-                    "weather": {"current": weather_data.get("current", {}) if weather_data else {}},
-                }
-                
-                with chat_container:
-                    with st.chat_message("assistant"):
-                        with st.spinner("Orion is thinking..."):
-                            answer = ask_llm(user_text, context)
-                            if answer:
-                                st.markdown(answer)
-                                st.session_state.chat_history.append({"role": "assistant", "content": answer})
-                            else:
-                                st.error("Sorry, I could not reach the middleware.")
+            st.session_state.chat_history.append({"role": "user", "content": user_text})
+            # Re-render new message
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(user_text)
+                    
+            # AI Response
+            context = {
+                "temperature": latest.get("temperature"),
+                "humidity": latest.get("humidity"),
+                "tvoc": latest.get("tvoc"),
+                "eco2": latest.get("eco2"),
+                "aq_label": latest.get("aq_label"),
+                "weather": {"current": weather_data.get("current", {}) if weather_data else {}},
+            }
+            
+            with chat_container:
+                with st.chat_message("assistant"):
+                    with st.spinner("Orion is thinking..."):
+                        answer = ask_llm(user_text, context)
+                        if answer:
+                            st.markdown(answer)
+                            st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                        else:
+                            st.error("Sorry, I could not reach the middleware.")
