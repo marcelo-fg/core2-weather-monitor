@@ -596,8 +596,17 @@ def _page_settings(data):
             
     lcd.print("+ Scan New WiFi (Setup)", 15, y, COL_BLUE)
             
+    # Brightness Touch Buttons
+    lcd.rect(15, 190, 60, 35, COL_BLUE, COL_BG)
+    lcd.font(FONT_LARGE)
+    lcd.print("-", 35, 197, COL_WHITE)
+    
     lcd.font(FONT_TINY)
-    lcd.print("[A] Brightness-          [C] Brightness+", 15, 200, COL_GRAY)
+    lcd.print("BRIGHTNESS", 95, 202, COL_WHITE)
+    
+    lcd.rect(180, 190, 60, 35, COL_BLUE, COL_BG)
+    lcd.font(FONT_LARGE)
+    lcd.print("+", 200, 197, COL_WHITE)
 
 def _page_voice(data):
     lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
@@ -1442,9 +1451,19 @@ def main():
                 utime.sleep_ms(300)
             
             elif ty >= 35 and ty <= 240:
-                # Handle touch in Settings Page to Switch WiFi
+                # Handle touch in Settings Page to Switch WiFi and Brightness
                 if page == 3:
                     last_interaction = now
+                    # Brightness buttons
+                    if ty >= 190 and ty <= 225:
+                        if tx >= 15 and tx <= 75:
+                            set_screen_brightness(current_brightness - 20)
+                        elif tx >= 180 and tx <= 240:
+                            set_screen_brightness(current_brightness + 20)
+                        utime.sleep_ms(300)
+                        continue
+                    
+                    # WiFi selection
                     wifi_hist = _wifi_get_history()
                     idx = (ty - 110) // 20
                     if 0 <= idx < len(wifi_hist):
@@ -1465,15 +1484,6 @@ def main():
 
             # M5Stack Core2 Virtual Buttons (Bottom bezel)
             elif ty > 240:
-                if page == 3:
-                    if tx < 106:      # Button A
-                        set_screen_brightness(current_brightness - 20)
-                    elif tx > 213:    # Button C
-                        set_screen_brightness(current_brightness + 20)
-                    last_interaction = now
-                    utime.sleep_ms(300)
-                    continue
-                    
                 if tx < 106:      # Button A
                     page = (page - 1) % NUM_PAGES
                 elif tx > 213:    # Button C
