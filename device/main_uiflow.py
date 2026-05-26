@@ -604,14 +604,14 @@ def _page_settings(data):
     # Brightness Touch Buttons (Border only, centered text)
     lcd.rect(15, 190, 60, 35, COL_BLUE, COL_BG)
     lcd.font(FONT_LARGE)
-    lcd.print("-", 38, 197, COL_WHITE)
+    lcd.print("-", 35, 190, COL_WHITE)
     
-    lcd.font(FONT_TINY)
-    lcd.print("BRIGHTNESS", 90, 202, COL_WHITE)
+    lcd.font(FONT_SMALL)
+    lcd.print("BRIGHTNESS", lcd.CENTER, 200, COL_WHITE)
     
-    lcd.rect(180, 190, 60, 35, COL_BLUE, COL_BG)
+    lcd.rect(245, 190, 60, 35, COL_BLUE, COL_BG)
     lcd.font(FONT_LARGE)
-    lcd.print("+", 201, 198, COL_WHITE)
+    lcd.print("+", 262, 190, COL_WHITE)
 
 def _page_voice(data):
     lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
@@ -706,14 +706,14 @@ def _page_standby(data, full=True):
         
         try:
             # Shift everything to center. Center is 160.
-            # Temp text ~ 60px, Icon ~ 50px. 
-            lcd.image(155, 155, _weather_icon_path(icon, big=True))
+            # Temp text ~ 100px, Icon ~ 50px. 
+            lcd.image(185, 150, _weather_icon_path(icon, big=True))
         except:
             pass
             
         if temp is not None:
-            lcd.font(FONT_MEDIUM)
-            lcd.print("{:.1f}C".format(temp), 80, 165, icon_color)
+            lcd.font(FONT_LARGE)
+            lcd.print("{:.1f}C".format(temp), 70, 155, icon_color)
     else:
         # Only update the time area to prevent flickering the image/date
         lcd.rect(15, 95, 290, 50, COL_BG, COL_BG)
@@ -1470,7 +1470,7 @@ def main():
                     if ty >= 190 and ty <= 225:
                         if tx >= 15 and tx <= 75:
                             set_screen_brightness(current_brightness - 20)
-                        elif tx >= 180 and tx <= 240:
+                        elif tx >= 240:
                             set_screen_brightness(current_brightness + 20)
                         utime.sleep_ms(300)
                         continue
