@@ -116,8 +116,7 @@ def get_sensor_history_weekly():
 
     day_buckets = {i: {"in": [], "out": []} for i in range(7)}
     humidity_list = []
-    alerts_count = 0
-    was_alert = False
+    eco2_list = []
     
     for row in rows:
         ts = row.get("timestamp")
@@ -135,11 +134,8 @@ def get_sensor_history_weekly():
             h = row.get("humidity")
             if h is not None: humidity_list.append(h)
             
-            aq = row.get("aq_label", "")
-            is_alert = aq in ["POOR", "HAZARDOUS"]
-            if is_alert and not was_alert:
-                alerts_count += 1
-            was_alert = is_alert
+            e = row.get("eco2")
+            if e is not None: eco2_list.append(e)
                 
         except Exception:
             pass
@@ -160,11 +156,27 @@ def get_sensor_history_weekly():
         })
 
     avg_humidity = sum(humidity_list) / len(humidity_list) if humidity_list else 0
+    avg_eco2 = sum(eco2_list) / len(eco2_list) if eco2_list else 0
 
     data = {
         "bars": weekly_bars,
         "humidity": int(avg_humidity),
-        "alerts": alerts_count
+        "eco2": int(avg_eco2)
     }
 
     return jsonify({"status": "ok", "data": data}), 200
+
+@sensor_bp.route("/api/time", methods=["GET"])
+def get_time():
+    """Returns the exact local time in Switzerland to fix M5Stack timezone bugs."""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Zurich")
+    except ImportError:
+        tz = timezone.utc
+    
+    now = datetime.now(tz)
+    return jsonify({
+        "status": "ok", 
+        "datetime": now.isoformat()
+    }), 200

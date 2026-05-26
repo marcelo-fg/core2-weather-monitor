@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import datetime
 import json
-from services.api_client import get_latest, get_history, get_weather, ask_llm, post_device_command
+from services.api_client import get_latest, get_history, get_weather, ask_llm, post_device_command, post_stt_only
 
 st.set_page_config(
     page_title="Core2 Weather Monitor",
@@ -492,7 +492,7 @@ if st.session_state.page == "main":
             
             air_insight = fetch_ai_insight(
                 "air_quality",
-                f"Indoor TVOC={v}ppb, eCO2={e}ppm. Level: {aq_full}. 1 short sentence analysis max.",
+                f"Indoor TVOC={v}ppb, eCO2={e}ppm. Level: {aq_full}. 1 short sentence analysis max. Answer in English only.",
                 json.dumps({"tvoc": v, "eco2": e}, default=str)
             )
 
@@ -514,7 +514,7 @@ if st.session_state.page == "main":
                 delta_insight = fetch_ai_insight(
                     "delta_temp",
                     f"Indoor {t:.1f} C, outdoor {cw_temp:.1f} C, delta {delta:+.1f} C. "
-                    f"1 short sentence explanation max.",
+                    f"1 short sentence explanation max. Answer in English only.",
                     json.dumps({"indoor": t, "outdoor": cw_temp, "delta": delta}, default=str)
                 )
                 html_str = f"""
@@ -548,215 +548,143 @@ elif st.session_state.page == "remote":
     with col_title:
         st.markdown("<div class='greeting-header' style='margin-top: 0;'>REMOTE DEVICE CONTROL</div>", unsafe_allow_html=True)
 
-    col_bright, col_device, col_vol, col_right = st.columns([1.5, 6, 1.5, 9], gap="small")
+    # === REMOTE LAYOUT ===
+    # Bento 1: Navigation
+    with st.container(border=True):
+        st.markdown("<div class='section-title'>CHANGE DEVICE PAGE</div>", unsafe_allow_html=True)
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            if st.button("HOME", use_container_width=True, key="btn_home"): 
+                post_device_command("set_page", "page=home")
+                st.toast("Navigated to HOME")
+        with col2:
+            if st.button("FORECAST", use_container_width=True, key="btn_weather"): 
+                post_device_command("set_page", "page=weather")
+                st.toast("Navigated to FORECAST")
+        with col3:
+            if st.button("HISTORY", use_container_width=True, key="btn_history"): 
+                post_device_command("set_page", "page=history")
+                st.toast("Navigated to HISTORY")
+        with col4:
+            if st.button("SETTINGS", use_container_width=True, key="btn_settings"): 
+                post_device_command("set_page", "page=settings")
+                st.toast("Navigated to SETTINGS")
 
-    col_bright, col_device, col_vol, col_right = st.columns([1.5, 5, 1.5, 10], gap="small")
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- M5STACK CORE 2 & SLIDERS CSS ---
-    st.markdown("""
-    <style>
-    /* 1) Outer M5Stack Core2 Wrapper */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-outer):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-outer))) {
-        background-color: #2b2b2b !important;
-        border: 2px solid #1a1a1a !important;
-        border-radius: 20px !important;
-        padding: 20px 20px 60px 20px !important;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
-        position: relative !important; /* For absolute positioning of bottom buttons */
-        margin: 0 auto !important;
-        max-width: 400px !important;
-    }
+    # Bento 2: Diagnostics
+    with st.container(border=True):
+        st.markdown("<div class='section-title'>SYSTEM DIAGNOSTICS & CONNECTIVITY</div>", unsafe_allow_html=True)
+        
+        last_ts = latest.get('timestamp')
+        is_online = False
+        if last_ts:
+            try:
+                last_dt = pd.to_datetime(last_ts, utc=True)
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                is_online = (now_utc - last_dt).total_seconds() < 360
+            except:
+                pass
 
-    /* 2) Inner Screen Wrapper */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-screen):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-screen))) {
-        background-color: #111 !important;
-        border: 4px solid #000 !important;
-        border-radius: 10px !important;
-        min-height: 250px !important;
-        padding: 10px !important;
-        margin-bottom: 0 !important;
-    }
+        status_color = "#22c55e" if is_online else "#ef4444"
+        status_text = "ONLINE" if is_online else "OFFLINE"
+        
+        env_temp_ok = "OK" if latest.get('temperature') is not None else "FAIL"
+        env_press_ok = "OK" if weather_data else "FAIL" 
+        sgp_ok = "OK" if latest.get('tvoc') is not None else "FAIL"
+        
+        html_diagnostics = f"""
+        <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+            <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">MAIN CONNECTIVITY</h4>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                <span style="font-weight: 600; color: #555;">Device Power</span>
+                <span style="font-weight: 800; color: {status_color};">{status_text}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                <span style="font-weight: 600; color: #555;">Cloud Backend Sync</span>
+                <span style="font-weight: 800; color: #22c55e;">CONNECTED</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0;">
+                <span style="font-weight: 600; color: #555;">Middleware Server</span>
+                <span style="font-weight: 800; color: #22c55e;">CONNECTED</span>
+            </div>
+        </div>
 
-    /* 3) Nav Pill Wrapper */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) {
-        border: 2px solid #444 !important;
-        border-radius: 15px !important;
-        padding: 4px !important;
-        margin-bottom: 100px !important; /* Empty space below nav on screen */
-        background-color: rgba(255,255,255,0.05) !important;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) button {
-        background-color: transparent !important;
-        border: none !important;
-        padding: 5px !important;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) button p {
-        color: #ddd !important;
-        font-size: 0.6rem !important;
-        font-weight: bold !important;
-        white-space: nowrap !important;
-        margin: 0 !important;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-nav))) button:hover p {
-        color: #3b82f6 !important;
-    }
+        <div style="background: #f8f9fa; border-radius: 8px; padding: 15px;">
+            <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">SENSORS HEALTH</h4>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                <span style="font-weight: 600; color: #555;">ENV III (Temp/Hum)</span>
+                <span style="font-weight: 800; color: #555;">{env_temp_ok}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                <span style="font-weight: 600; color: #555;">ENV III (Pressure)</span>
+                <span style="font-weight: 800; color: #555;">{env_press_ok}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0;">
+                <span style="font-weight: 600; color: #555;">SGP30 (TVOC/eCO2)</span>
+                <span style="font-weight: 800; color: #555;">{sgp_ok}</span>
+            </div>
+        </div>
+        """
+        st.markdown(html_diagnostics, unsafe_allow_html=True)
+        
+        st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+        if st.button("Run Full System Diagnostic", use_container_width=True):
+            st.toast("Diagnostic test initiated on device.")
 
-    /* 4) Bottom Red Circles (A, B, C) */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) {
-        border: none !important;
-        background-color: transparent !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        position: absolute !important;
-        bottom: 15px !important;
-        left: 0 !important;
-        right: 0 !important;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) button {
-        background-color: transparent !important;
-        border: 2px solid #e74c3c !important; /* Red Core2 circles */
-        border-radius: 50% !important;
-        height: 35px !important;
-        width: 35px !important;
-        min-height: 35px !important;
-        padding: 0 !important;
-        margin: 0 auto !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        transition: all 0.2s !important;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) button:hover {
-        background-color: rgba(231, 76, 60, 0.2) !important;
-        box-shadow: 0 0 10px rgba(231, 76, 60, 0.5) !important;
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) button p {
-        color: transparent !important; /* Hide the text, it's just a red circle */
-    }
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom):not(:has(div[data-testid="stVerticalBlockBorderWrapper"]:has(#m5-bottom))) div[data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        justify-content: center !important;
-        gap: 30px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- TOP ROW: HORIZONTAL SLIDERS ---
-    col_b, col_v = st.columns(2, gap="large")
-    with col_b:
-        brightness = st.slider("☀️ Brightness", 0, 100, 80, key="b_slide")
-        if st.button("Apply Brightness", key="apply_b"):
-            post_device_command("settings", f"b={brightness}")
-            st.toast("Brightness updated")
+    # Bento 3: AI Assistant Chat
+    with st.container(border=True):
+        st.markdown("<div class='section-title'>ORION AI ASSISTANT</div>", unsafe_allow_html=True)
+        
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
             
-    with col_v:
-        volume = st.slider("🔊 Volume", 0, 100, 50, key="v_slide")
-        if st.button("Apply Volume", key="apply_v"):
-            post_device_command("settings", f"v={volume}")
-            st.toast("Volume updated")
+        chat_container = st.container(height=350)
+        with chat_container:
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+        
+        # Audio / Text Input
+        prompt = st.chat_input("Ask Orion anything about the station...")
+        audio_val = st.audio_input("Or speak to Orion...")
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
+        if prompt or audio_val:
+            user_text = prompt
+            if audio_val and not prompt:
+                with st.spinner("Transcribing audio..."):
+                    res = post_stt_only(audio_val.getvalue())
+                    if res and res.get("text"):
+                        user_text = res["text"]
+                    else:
+                        st.error("Failed to transcribe audio.")
+                        user_text = None
 
-    # --- MAIN LAYOUT ---
-    col_device, col_right = st.columns([1, 1], gap="large")
-
-    with col_device:
-        # --- M5STACK CORE 2 REPLICA ---
-        with st.container(border=True):
-            st.markdown("<div id='m5-outer'></div>", unsafe_allow_html=True)
-            
-            # The Screen
-            with st.container(border=True):
-                st.markdown("<div id='m5-screen'></div>", unsafe_allow_html=True)
-                
-                # Screen Top Nav
-                with st.container(border=True):
-                    st.markdown("<div id='m5-nav'></div>", unsafe_allow_html=True)
-                    nav1, nav2, nav3, nav4 = st.columns(4)
-                    with nav1:
-                        if st.button("HOME", use_container_width=True, key="btn_home"): 
-                            post_device_command("set_page", "page=home")
-                    with nav2:
-                        if st.button("FORECAST", use_container_width=True, key="btn_weather"): 
-                            post_device_command("set_page", "page=weather")
-                    with nav3:
-                        if st.button("HISTORY", use_container_width=True, key="btn_history"): 
-                            post_device_command("set_page", "page=history")
-                    with nav4:
-                        if st.button("SETTINGS", use_container_width=True, key="btn_settings"): 
-                            post_device_command("set_page", "page=settings")
+            if user_text:
+                st.session_state.chat_history.append({"role": "user", "content": user_text})
+                # Re-render new message
+                with chat_container:
+                    with st.chat_message("user"):
+                        st.markdown(user_text)
                         
-            # The 3 Red Capacitive Touch Buttons (A, B, C)
-            with st.container(border=True):
-                st.markdown("<div id='m5-bottom'></div>", unsafe_allow_html=True)
-                btn1, btn2, btn3 = st.columns(3)
-            with btn1:
-                if st.button("A", key="btn_a"): 
-                    post_device_command("btn", "a")
-            with btn2:
-                if st.button("B", key="btn_b"): 
-                    post_device_command("btn", "b")
-            with btn3:
-                if st.button("C", key="btn_c"): 
-                    post_device_command("btn", "c")
-
-    with col_right:
-        # --- DIAGNOSTICS BENTO ---
-        with st.container(border=True):
-            st.markdown("<div class='section-title'>SYSTEM DIAGNOSTICS & CONNECTIVITY</div>", unsafe_allow_html=True)
-            
-            last_ts = latest.get('timestamp')
-            is_online = False
-            if last_ts:
-                try:
-                    last_dt = pd.to_datetime(last_ts, utc=True)
-                    now_utc = datetime.datetime.now(datetime.timezone.utc)
-                    is_online = (now_utc - last_dt).total_seconds() < 360
-                except:
-                    pass
-
-            status_color = "#22c55e" if is_online else "#ef4444"
-            status_text = "ONLINE" if is_online else "OFFLINE"
-            
-            env_temp_ok = "OK" if latest.get('temperature') is not None else "FAIL"
-            env_press_ok = "OK" if weather_data else "FAIL" 
-            sgp_ok = "OK" if latest.get('tvoc') is not None else "FAIL"
-            
-            html_diagnostics = f"""
-            <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
-                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">MAIN CONNECTIVITY</h4>
-                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
-                    <span style="font-weight: 600; color: #555;">Device Power</span>
-                    <span style="font-weight: 800; color: {status_color};">{status_text}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
-                    <span style="font-weight: 600; color: #555;">Cloud Backend Sync</span>
-                    <span style="font-weight: 800; color: #22c55e;">CONNECTED</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 5px 0;">
-                    <span style="font-weight: 600; color: #555;">Middleware Server</span>
-                    <span style="font-weight: 800; color: #22c55e;">CONNECTED</span>
-                </div>
-            </div>
-
-            <div style="background: #f8f9fa; border-radius: 8px; padding: 15px;">
-                <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #333; text-transform: uppercase;">SENSORS HEALTH</h4>
-                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
-                    <span style="font-weight: 600; color: #555;">ENV III (Temp/Hum)</span>
-                    <span style="font-weight: 800; color: #555;">{env_temp_ok}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
-                    <span style="font-weight: 600; color: #555;">ENV III (Pressure)</span>
-                    <span style="font-weight: 800; color: #555;">{env_press_ok}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 5px 0;">
-                    <span style="font-weight: 600; color: #555;">SGP30 (TVOC/eCO2)</span>
-                    <span style="font-weight: 800; color: #555;">{sgp_ok}</span>
-                </div>
-            </div>
-            """
-            st.markdown(html_diagnostics, unsafe_allow_html=True)
-            
-            st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
-            if st.button("Run Full System Diagnostic", use_container_width=True):
-                st.toast("Diagnostic test initiated on device.")
+                # AI Response
+                context = {
+                    "temperature": latest.get("temperature"),
+                    "humidity": latest.get("humidity"),
+                    "tvoc": latest.get("tvoc"),
+                    "eco2": latest.get("eco2"),
+                    "aq_label": latest.get("aq_label"),
+                    "weather": {"current": weather_data.get("current", {}) if weather_data else {}},
+                }
+                
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        with st.spinner("Orion is thinking..."):
+                            answer = ask_llm(user_text, context)
+                            if answer:
+                                st.markdown(answer)
+                                st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                            else:
+                                st.error("Sorry, I could not reach the middleware.")

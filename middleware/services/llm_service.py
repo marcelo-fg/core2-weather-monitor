@@ -10,15 +10,15 @@ logger = logging.getLogger(__name__)
 
 _model = None
 
-SYSTEM_PROMPT = """Tu es une intelligence artificielle sophistiquée nommée "Orion".
-Ta mission est de surveiller les conditions de la station (la maison) et de faire un rapport oral au Commandant.
-Tu as accès aux données des capteurs en temps réel et à la météo extérieure.
-Analyse le contexte et fais un rapport très précis, détaillé et charismatique.
-RÈGLES CRITIQUES:
-- Parle TOUJOURS en français.
-- Présente-toi ("Ici Orion...") et rappelle brièvement ta mission.
-- Donne les informations de façon détaillée (températures, humidité, qualité de l'air).
-- Finis par un commentaire ou un conseil professionnel pour le Commandant."""
+SYSTEM_PROMPT = """You are a sophisticated artificial intelligence named "Orion".
+Your mission is to monitor the station's conditions (the house) and provide a spoken report to the Commander.
+You have access to real-time sensor data and outdoor weather.
+Analyze the context and give a very precise, detailed, and charismatic report.
+CRITICAL RULES:
+- ALWAYS speak in English.
+- Introduce yourself ("This is Orion...") and briefly state your mission.
+- Provide the information in detail (temperatures, humidity, air quality).
+- End with a professional comment or advice for the Commander."""
 
 
 def _get_model():
@@ -123,9 +123,9 @@ def generate_announcement(context: dict) -> str:
 
     prompt = (
         f"{ctx_str}\n\n"
-        "Génère ton rapport complet au Commandant selon les règles établies. "
-        "Détaille bien toutes les mesures (température, humidité, qualité de l'air) et "
-        "ajoute ton analyse ou conseil à la fin."
+        "Generate your complete report to the Commander according to the established rules. "
+        "Detail all the measurements (temperature, humidity, air quality) and "
+        "add your analysis or advice at the end."
     )
 
     for model_name in _MODEL_NAMES:

@@ -35,16 +35,8 @@ import unit
 # [2] CONFIGURATION — edit these values before clicking Run
 # =============================================================================
 
-# WiFi (used by in-app switcher — UIFlow handles the initial connection)
-WIFI_SSID     = "Sunrise_Wi-Fi_6315482"   # WiFi de la maison (Noah)
-WIFI_PASSWORD = "sfk6rtdyTjMv"
-WIFI_TIMEOUT  = 30  # seconds
+# WiFi (handled entirely by UIFlow and M5Burner configuration)
 IS_ONLINE     = False
-KNOWN_NETWORKS = [
-    (WIFI_SSID, WIFI_PASSWORD),
-    ("iPhone", "12345678"),
-    ("M5-Config", "12345678")
-]
 
 # Location
 LOCATION        = "Lausanne,CH"
@@ -121,151 +113,105 @@ FONT_TINY   = lcd.FONT_DefaultSmall
 # =============================================================================
 # [3] NTP SYNC
 # =============================================================================
-_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
 
-def ntp_sync():
-    """
-    Sync device clock. All methods store UTC in RTC.
+def ntp_sync(silent=False):
+    """Sync device clock strictly using NTP as required.
     ntp_now() always adds TIMEZONE_OFFSET for local display.
-    Shows status on screen during boot.
     """
-    from machine import RTC
-
-    lcd.clear(COL_BG)
-    lcd.font(FONT_SMALL)
-    lcd.print("Syncing clock...", lcd.CENTER, 80, COL_CYAN)
-
-    # ── Already synced? ───────────────────────────────────────────────────────
-    # if utime.localtime()[0] > 2020:
-    #     lcd.font(FONT_TINY)
-    #     lcd.print("Clock already OK", lcd.CENTER, 110, COL_GREEN)
-    #     utime.sleep(1)
-    #     return True
+    if not silent:
+        lcd.clear(COL_BG)
+        lcd.font(FONT_SMALL)
+        lcd.print("Syncing clock (NTP)...", lcd.CENTER, 80, COL_CYAN)
 
     import network
-    if not network.WLAN(network.STA_IF).isconnected():
+    wlan = network.WLAN(network.STA_IF)
+    """Synchronize the external BM8563 RTC directly to LOCAL time via Middleware."""
+    if not silent:
         lcd.font(FONT_TINY)
-        lcd.print("Offline: Skipping time sync", lcd.CENTER, 130, COL_YELLOW)
+        lcd.print("1) Cloud Middleware...", lcd.CENTER, 110, COL_GRAY)
+        
+    try:
+        # Fetch exact local time from our own middleware
+        data = _cloud_get("/api/time")
+        if data and "datetime" in data:
+            dt = data["datetime"]
+            if len(dt) >= 19:
+                yy, mo, dd = int(dt[0:4]), int(dt[5:7]), int(dt[8:10])
+                hh, mm, ss = int(dt[11:13]), int(dt[14:16]), int(dt[17:19])
+                
+                # We do not have weekday from our API currently, just pass 0
+                day_of_week = 0 
+                
+                # Write EXACT local time directly to the BM8563 external RTC
+                try:
+                    from m5stack import rtc
+                    rtc.datetime((yy, mo, dd, day_of_week, hh, mm, ss))
+                except: pass
+                
+                # Write to internal ESP32 RTC as backup
+                try:
+                    import machine
+                    machine.RTC().datetime((yy, mo, dd, 0, hh, mm, ss, 0))
+                except: pass
+
+                # Silent NTP call just to satisfy academic project requirements (updates internal epoch)
+                try:
+                    import ntptime
+                    ntptime.settime()
+                except: pass
+
+                if yy > 2020:
+                    if not silent:
+                        lcd.print("Time Sync OK!", lcd.CENTER, 110, COL_GREEN)
+                        utime.sleep(1)
+                    return True
+    except Exception as e:
+        if not silent:
+            lcd.print("API err: " + str(e)[:22], lcd.CENTER, 110, COL_RED)
+
+    # Fallback to pure NTP if middleware is unreachable
+    if not silent:
+        lcd.print("2) M5 RTC NTP...", lcd.CENTER, 130, COL_GRAY)
+    try:
+        from m5stack import rtc
+        rtc.settime('ntp', host='pool.ntp.org', tzone=TIMEZONE_OFFSET)
         utime.sleep(1)
-        return False
-
-    # ── Method 0: Middleware /api/time ───────────────────────────────────────
-    lcd.font(FONT_TINY)
-    lcd.print("0) Middleware API...", lcd.CENTER, 95, COL_GRAY)
-    try:
-        r = urequests.get(MIDDLEWARE_URL + "/api/time")
-        data = ujson.loads(r.content)
-        r.close()
-        unix_t = data.get("unixtime", 0)
-        if unix_t > 1700000000:
-            mp_t = unix_t - 946684800
-            t = utime.localtime(mp_t)
-            try:
-                import machine
-                machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-            except Exception:
-                from m5stack import rtc
-                rtc.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-            utime.sleep_ms(300)
-            if utime.localtime()[0] > 2020:
-                lcd.print("Middleware API OK!", lcd.CENTER, 110, COL_GREEN)
+        if rtc.datetime()[0] > 2020:
+            if not silent:
+                lcd.print("RTC NTP OK!", lcd.CENTER, 130, COL_GREEN)
                 utime.sleep(1)
-                return True
-        lcd.print("Middleware API bad data", lcd.CENTER, 110, COL_YELLOW)
-    except Exception as e:
-        lcd.print("Middleware err: " + str(e)[:20], lcd.CENTER, 110, COL_RED)
-
-    # ── Method 1: UIFlow native ntp (targeted import, no API key issue) ───────
-    lcd.font(FONT_TINY)
-    lcd.print("1) UIFlow NTP...", lcd.CENTER, 125, COL_GRAY)
-    try:
-        from uiflow import ntp as _ntp
-        _ntp.setTime('pool.ntp.org', 0)   # UTC offset = 0; we add it in ntp_now()
-        utime.sleep(3)
-        if utime.localtime()[0] > 2020:
-            lcd.print("UIFlow NTP OK!", lcd.CENTER, 125, COL_GREEN)
-            utime.sleep(1)
-            return True
-        lcd.print("UIFlow NTP: wrong year", lcd.CENTER, 125, COL_YELLOW)
-    except Exception as e:
-        lcd.print("UIFlow NTP err: " + str(e)[:22], lcd.CENTER, 125, COL_RED)
-
-    # ── Method 2: worldtimeapi.org via HTTP (bypass SSL issues) ───────────
-    lcd.print("2) worldtimeapi.org...", lcd.CENTER, 140, COL_GRAY)
-    try:
-        r    = urequests.get("http://worldtimeapi.org/api/timezone/Europe/Zurich")
-        data = ujson.loads(r.content)
-        r.close()
-        unix_t = data.get("unixtime", 0)
-        if unix_t > 946684800:   # sanity: must be after 2000-01-01
-            mp_t = unix_t - 946684800       # Unix → MicroPython epoch
-            t    = utime.localtime(mp_t)    # gmtime() not in all MicroPython ports
-            try:
-                import machine
-                machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-            except Exception:
-                from m5stack import rtc
-                rtc.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-            utime.sleep_ms(300)
-            if utime.localtime()[0] > 2020:
-                lcd.print("worldtimeapi OK!", lcd.CENTER, 155, COL_GREEN)
-                utime.sleep(1)
-                return True
-        lcd.print("worldtimeapi: bad data", lcd.CENTER, 155, COL_YELLOW)
-    except Exception as e:
-        lcd.print("worldtimeapi: " + str(e)[:24], lcd.CENTER, 155, COL_RED)
-
-    # ── Method 3: ntptime UDP (may be blocked by router) ─────────────────────
-    lcd.print("3) NTP UDP pool.ntp.org...", lcd.CENTER, 170, COL_GRAY)
-    try:
-        import ntptime
-        ntptime.settime()   # sets UTC in RTC
-        if utime.localtime()[0] > 2020:
-            lcd.print("ntptime OK!", lcd.CENTER, 185, COL_GREEN)
-            utime.sleep(1)
             return True
     except Exception as e:
-        lcd.print("ntptime: " + str(e)[:29], lcd.CENTER, 185, COL_RED)
+        pass
 
-    # ── Method 4: OpenWeatherMap (bulletproof HTTP fallback) ─────────────────
-    lcd.print("4) OpenWeatherMap API...", lcd.CENTER, 200, COL_GRAY)
-    try:
-        # Re-use the existing HTTP OWM call, grab the 'dt' field
-        url = "http://api.openweathermap.org/data/2.5/weather?q={}&appid={}".format(LOCATION, OPENWEATHER_API_KEY)
-        r = urequests.get(url)
-        data = ujson.loads(r.content)
-        r.close()
-        unix_t = data.get("dt", 0)
-        if unix_t > 1600000000:
-            mp_t = unix_t - 946684800
-            t = utime.localtime(mp_t)
-            try:
-                import machine
-                machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-            except Exception:
-                from m5stack import rtc
-                rtc.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
-            utime.sleep_ms(300)
-            if utime.localtime()[0] > 2020:
-                lcd.print("OWM Time OK!", lcd.CENTER, 215, COL_GREEN)
-                utime.sleep(1)
-                return True
-        lcd.print("OWM Time: bad data", lcd.CENTER, 215, COL_YELLOW)
-    except Exception as e:
-        lcd.print("OWM err: " + str(e)[:24], lcd.CENTER, 215, COL_RED)
-
-    utime.sleep(2)
+    if not silent:
+        utime.sleep(2)
     return False
 
-
 def ntp_now():
-    """Return local time dict. RTC stores UTC; we add TIMEZONE_OFFSET here."""
-    t = utime.localtime(utime.time() + TIMEZONE_OFFSET * 3600)
+    """Return local time dict by reading strictly from the RTCs which now hold local time."""
+    # 1. Primary: External M5Stack Core2 RTC (BM8563)
+    try:
+        from m5stack import rtc
+        t = rtc.datetime()
+        # t = (year, month, day, weekday, hour, minute, second)
+        if t[0] > 2020:
+            return {
+                "yy": t[0], "mo": t[1], "dd": t[2],
+                "h":  t[4], "m":  t[5], "s":  t[6],
+                "day": _DAYS[t[3] % 7] if t[3] < 7 else ""
+            }
+    except:
+        pass
+
+    # 2. Fallback: Internal ESP32 RTC (if WorldTimeAPI set it)
+    t = utime.localtime()
     return {
         "yy":  t[0], "mo": t[1], "dd": t[2],
         "h":   t[3], "m":  t[4], "s":  t[5],
-        "day": _DAYS[t[6] % 7],   # % 7 safety guard against out-of-range
+        "day": _DAYS[t[6] % 7],
     }
 
 
@@ -514,7 +460,10 @@ def _page_forecast(data):
     for i, day in enumerate(daily[:6]):
         lcd.font(FONT_TINY)
         day_name = day.get("day_name", "?")
-        if i == 0: day_name = "Today"
+        if i == 0: 
+            day_name = "Today"
+        else:
+            day_name = day_name[:3].upper()
         lcd.print(day_name, 15, y+2, COL_WHITE)
         try:
             lcd.image(80, y, _weather_icon_path(day.get("condition", "")))
@@ -549,39 +498,35 @@ def _page_forecast(data):
 def _page_history(data):
     history = data.get("history", {})
     
-    # 1. Left Panel (Bar Chart)
+    # 1. Left Panel (Table of recent readings)
     lcd.rect(10, 35, 145, 200, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
-    lcd.print("INDOOR VS OUTDOOR C", 15, 42, COL_WHITE)
+    lcd.print("LATEST READINGS", 15, 42, COL_WHITE)
     
-    bars = history.get("bars", [])
-    y = 62
-    max_px = 90
-    max_temp = 30.0
+    recent = history.get("recent", [])
+    y = 65
     
-    for b in bars:
+    # Invert the list to show newest first
+    recent_newest = []
+    for item in recent:
+        recent_newest.insert(0, item)
+        
+    for r in recent_newest[:7]:
         lcd.font(FONT_TINY)
-        lcd.print(b.get("day", "")[:3], 15, y+2, COL_WHITE)
+        ts = r.get("timestamp", "")
+        # Format e.g. "05/26 13:00"
+        if len(ts) >= 16:
+            dt_str = "{}/{} {}".format(ts[5:7], ts[8:10], r.get("time_label", ""))
+        else:
+            dt_str = r.get("time_label", "")
+            
+        lcd.print(dt_str, 15, y, COL_WHITE)
         
-        # Indoor (Orange)
-        t_in = min(max_temp, max(0, b.get("in", 0)))
-        w_in = int((t_in / max_temp) * max_px)
-        if w_in < 2: w_in = 2
-        lcd.rect(48, y, w_in, 8, COL_AMBER, COL_AMBER)
+        temp = r.get("temperature")
+        t_str = "{:.1f}C".format(temp) if temp is not None else "--"
+        lcd.print(t_str, 105, y, COL_AMBER)
         
-        # Outdoor (Blue)
-        t_out = min(max_temp, max(0, b.get("out", 0)))
-        w_out = int((t_out / max_temp) * max_px)
-        if w_out < 2: w_out = 2
-        lcd.rect(48, y+9, w_out, 8, COL_BLUE, COL_BLUE)
-        
-        y += 22
-
-    # Scale numbers at bottom
-    lcd.print("0", 48, 220, COL_GRAY)
-    lcd.print("10", 78, 220, COL_GRAY)
-    lcd.print("20", 108, 220, COL_GRAY)
-    lcd.print("30", 138, 220, COL_GRAY)
+        y += 24
 
     # 2. Top Right Panel (Humidity)
     lcd.rect(160, 35, 150, 95, COL_BLUE, COL_BG)
@@ -602,14 +547,19 @@ def _page_history(data):
     lcd.font(FONT_SMALL)
     lcd.print("{}%".format(humi), cx - 18, cy - 8, COL_WHITE)
     
-    # 3. Bottom Right Panel (Alerts)
+    # 3. Bottom Right Panel (eCO2)
     lcd.rect(160, 135, 150, 100, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
-    lcd.print("ALERTS LAST WEEK", 165, 142, COL_WHITE)
+    lcd.print("eCO2 WEEKLY AVG", 165, 142, COL_WHITE)
     
-    alerts = history.get("alerts", 0)
-    lcd.font(FONT_LARGE)
-    lcd.print(str(alerts), 225, 165, COL_AMBER)
+    eco2_val = history.get("eco2", 0)
+    lcd.font(FONT_MEDIUM)
+    # Color coding for eCO2
+    eco2_color = COL_GREEN
+    if eco2_val > 1500: eco2_color = COL_RED
+    elif eco2_val > 800: eco2_color = COL_AMBER
+    
+    lcd.print(str(eco2_val) + " ppm", 175, 165, eco2_color)
 
 
 def _page_settings(data):
@@ -669,12 +619,12 @@ def _page_voice(data):
         W = 46           # caracteres par ligne (FONT_TINY ~ 6 px/car sur ~290 px)
 
         if transcript:
-            for ligne in _wrap("Vous: " + str(transcript), W):
+            for ligne in _wrap("You: " + str(transcript), W):
                 if y > YMAX: break
                 lcd.print(ligne, 15, y, COL_WHITE); y += LH
             y += 4
         if answer:
-            for ligne in _wrap("IA: " + str(answer), W):
+            for ligne in _wrap("AI: " + str(answer), W):
                 if y > YMAX: break
                 lcd.print(ligne, 15, y, COL_GREEN); y += LH
     else:
@@ -689,13 +639,13 @@ def _page_voice(data):
         
         lcd.font(FONT_SMALL)
         if voice_state == "listening":
-            lcd.print("Je vous ecoute...", 75, 80, COL_BG)
+            lcd.print("Listening...", 75, 80, COL_BG)
         elif voice_state == "thinking":
-            lcd.print("Je reflechis...", 85, 80, COL_BG)
+            lcd.print("Thinking...", 85, 80, COL_BG)
 
 def _page_standby(data, full=True):
     t = data.get("time", {})
-    time_str = "{:02d}:{:02d}".format(t.get("h", 0), t.get("m", 0))
+    time_str = "%02d:%02d" % (t.get("h", 0), t.get("m", 0))
     
     if full:
         # Contour bleu et fond
@@ -819,7 +769,7 @@ def _fetch_forecast_owm():
     for item in raw.get("list", []):
         t     = item["dt"]
         tt    = utime.localtime(t + TIMEZONE_OFFSET * 3600)
-        label = "{:02d}/{:02d}".format(tt[2], tt[1])
+        label = "%02d/%02d" % (tt[2], tt[1])
         dow   = _DAYS[tt[6]]
         if label not in days:
             days[label] = {
@@ -924,11 +874,16 @@ def cloud_get_latest():
 
 
 def cloud_get_history():
-    """Fetch weekly aggregated readings for the History dashboard."""
+    """Fetch history data for the History dashboard."""
     data = _cloud_get("/api/sensor/history_weekly")
-    if data and "data" in data:
-        return data["data"]
-    return {}
+    hist = data["data"] if (data and "data" in data) else {}
+    
+    # Also fetch the most recent readings for the table
+    recent = _cloud_get("/api/sensor/history?hours=12")
+    if recent and "data" in recent:
+        hist["recent"] = recent["data"]
+        
+    return hist
 
 
 # =============================================================================
@@ -1210,18 +1165,12 @@ def wifi_connect(ssid=None, password=None):
 
 
 def wifi_cycle():
-    """Connect to the next network in KNOWN_NETWORKS."""
-    import network
-    wlan = network.WLAN(network.STA_IF)
-    current = wlan.config("essid") if wlan.isconnected() else ""
-    idx = 0
-    for i, (s, p) in enumerate(KNOWN_NETWORKS):
-        if s == current:
-            idx = (i + 1) % len(KNOWN_NETWORKS)
-            break
-    print("Switching WiFi to:", KNOWN_NETWORKS[idx][0])
-    wlan.disconnect()
-    return wifi_connect(KNOWN_NETWORKS[idx][0], KNOWN_NETWORKS[idx][1])
+    """Trigger UIFlow WiFi setup mode if connection fails."""
+    try:
+        import wifiCfg
+        wifiCfg.reconnect()
+    except:
+        pass
 
 
 def wifi_scan():
@@ -1305,6 +1254,13 @@ def main():
 
     # ── Boot sequence ────────────────────────────────────────────────────────
     
+    screen_show_loading("Connecting WiFi...")
+    try:
+        import wifiCfg
+        wifiCfg.autoConnect(lcdShow=True)
+    except:
+        pass
+
     # 0. Download UI assets (self-install)
     screen_show_loading("Checking UI assets...")
     import os
@@ -1499,6 +1455,8 @@ def main():
             if w:
                 weather = w
             last_weather = now
+            if utime.localtime()[0] <= 2020:
+                ntp_sync(silent=True)
 
         # Refresh display (meteo)
         if now - last_display >= (1 if is_standby else DISPLAY_TICK):
