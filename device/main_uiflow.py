@@ -45,11 +45,15 @@ TIMEZONE_OFFSET = 2  # CEST = UTC+2
 # Middleware (Flask API on Google Cloud Run — deployed!)
 MIDDLEWARE_URL = "https://core2-middleware-337108994948.europe-west1.run.app"
 
+current_brightness = 50
+
 def set_screen_brightness(level):
     """Safely attempts to set screen brightness (0-100) across different M5Stack API versions"""
+    global current_brightness
+    current_brightness = max(0, min(100, int(level)))
     try:
         # Core2 axp global object
-        axp.setLcdBrightness(level)
+        axp.setLcdBrightness(current_brightness)
         return
     except: pass
     try:
@@ -568,16 +572,32 @@ def _page_settings(data):
     lcd.print("SETTINGS & STATUS", 15, 42, COL_BLUE)
     lcd.line(10, 55, 310, 55, COL_BLUE)
     
-    lcd.print("WiFi Connected: " + data.get("wifi_ssid", "?"), 15, 65, COL_GREEN)
-    lcd.print("Middleware: " + ("OK" if data.get("weather") else "ERROR"), 15, 95, COL_GREEN if data.get("weather") else COL_RED)
+    mw_ok = bool(data.get("weather"))
+    sns_ok = data.get("sensors_ok", False)
     
-    # WiFi Switcher UI
-    lcd.rect(50, 130, 220, 40, COL_BLUE, COL_BG)
-    lcd.font(FONT_SMALL)
-    lcd.print("SWITCH WIFI", 100, 140, COL_WHITE)
+    lcd.print("Middleware: " + ("OK" if mw_ok else "ERROR"), 15, 65, COL_GREEN if mw_ok else COL_RED)
+    lcd.print("Sensors: " + ("OK" if sns_ok else "ERROR"), 170, 65, COL_GREEN if sns_ok else COL_RED)
     
+    lcd.print("Saved WiFi Networks (Touch to connect):", 15, 90, COL_WHITE)
+    
+    history = data.get("wifi_history", [])
+    y = 110
+    if not history:
+        lcd.print("No saved networks.", 15, y, COL_GRAY)
+        y += 20
+    else:
+        for idx, net in enumerate(history):
+            ssid = net.get("ssid", "")
+            is_cur = (ssid == data.get("wifi_ssid"))
+            col = COL_GREEN if is_cur else COL_WHITE
+            prefix = "> " if is_cur else "  "
+            lcd.print(prefix + ssid[:25], 15, y, col)
+            y += 20
+            
+    lcd.print("+ Scan New WiFi (Setup)", 15, y, COL_BLUE)
+            
     lcd.font(FONT_TINY)
-    lcd.print("[A] Volume-  [B] Mic Test  [C] Volume+", 25, 200, COL_GRAY)
+    lcd.print("[A] Brightness-          [C] Brightness+", 15, 200, COL_GRAY)
 
 def _page_voice(data):
     lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
@@ -1118,19 +1138,34 @@ def build_announcement(data, forecast):
 _CREDS_FILE = "wifi_creds.json"
 
 
-def _wifi_load_creds():
+def _wifi_get_history():
     try:
         with open(_CREDS_FILE) as f:
             d = ujson.load(f)
-        return d["ssid"], d["password"]
+        if isinstance(d, dict) and "networks" in d:
+            return d["networks"]
+        elif isinstance(d, dict) and "ssid" in d:
+            return [{"ssid": d["ssid"], "password": d["password"]}]
+        return []
     except Exception:
-        return WIFI_SSID, WIFI_PASSWORD
+        return []
+
+
+def _wifi_load_creds():
+    history = _wifi_get_history()
+    if history:
+        return history[0]["ssid"], history[0].get("password", "")
+    return WIFI_SSID, WIFI_PASSWORD
 
 
 def _wifi_save_creds(ssid, password):
+    history = _wifi_get_history()
+    history = [n for n in history if n.get("ssid") != ssid]
+    history.insert(0, {"ssid": ssid, "password": password})
+    history = history[:4]
     try:
         with open(_CREDS_FILE, "w") as f:
-            ujson.dump({"ssid": ssid, "password": password}, f)
+            ujson.dump({"networks": history}, f)
     except Exception as e:
         print("[wifi] could not save creds:", e)
 
@@ -1217,11 +1252,26 @@ def update_alerts(indoor):
 def build_display_data(indoor, weather, history, time_now,
                        wifi_networks=None, wifi_selected=0):
     data = {}
-    data.update(indoor)
+    if indoor:
+        data.update(indoor)
+    data["time_now"]      = time_now
+    data["time"]          = time_now
+    data["indoor"]        = indoor
     data["weather"]       = weather
     data["history"]       = history
-    data["time"]          = time_now
     data["wifi_ssid"]     = wifi_current_ssid()
+    data["wifi_history"]  = _wifi_get_history()
+    
+    # Check sensor health
+    sensors_ok = True
+    if indoor:
+        if indoor.get("temperature") == 0 and indoor.get("humidity") == 0:
+            sensors_ok = False
+        if indoor.get("tvoc") == 0 and indoor.get("eco2") == 400: # sgp30 often defaults to these
+            pass # might just be clean air, but we can assume ok if reading works
+    else:
+        sensors_ok = False
+    data["sensors_ok"]    = sensors_ok
     data["wifi_networks"] = wifi_networks or []
     data["wifi_selected"] = wifi_selected
     return data
@@ -1387,17 +1437,37 @@ def main():
             
             elif ty >= 35 and ty <= 240:
                 # Handle touch in Settings Page to Switch WiFi
-                if page == 3 and tx >= 50 and tx <= 270 and ty >= 130 and ty <= 170:
+                if page == 3:
                     last_interaction = now
-                    screen_show_loading("Switching WiFi...")
-                    wifi_cycle()
-                    data = build_display_data(indoor, weather, history, ntp_now())
-                    screen_render(page, data, is_standby)
-                    utime.sleep_ms(300)
-                    continue
+                    wifi_hist = _wifi_get_history()
+                    idx = (ty - 110) // 20
+                    if 0 <= idx < len(wifi_hist):
+                        net = wifi_hist[idx]
+                        screen_show_loading("Connecting to " + net.get("ssid", "")[:15] + "...")
+                        wifi_connect(net.get("ssid"), net.get("password"))
+                        data = build_display_data(indoor, weather, history, ntp_now())
+                        screen_render(page, data, is_standby)
+                        utime.sleep_ms(300)
+                        continue
+                    elif idx == len(wifi_hist) or (not wifi_hist and idx == 1):
+                        screen_show_loading("Switching WiFi...")
+                        wifi_cycle()
+                        data = build_display_data(indoor, weather, history, ntp_now())
+                        screen_render(page, data, is_standby)
+                        utime.sleep_ms(300)
+                        continue
 
             # M5Stack Core2 Virtual Buttons (Bottom bezel)
             elif ty > 240:
+                if page == 3:
+                    if tx < 106:      # Button A
+                        set_screen_brightness(current_brightness - 20)
+                    elif tx > 213:    # Button C
+                        set_screen_brightness(current_brightness + 20)
+                    last_interaction = now
+                    utime.sleep_ms(300)
+                    continue
+                    
                 if tx < 106:      # Button A
                     page = (page - 1) % NUM_PAGES
                 elif tx > 213:    # Button C
