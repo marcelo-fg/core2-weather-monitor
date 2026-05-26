@@ -9,7 +9,6 @@ Endpoints:
 - GET  /api/voice/smart_welcome : 1-sentence context-aware greeting.
 - POST /api/voice/query         : text Q&A (used by the dashboard).
 - POST /api/voice/listen        : full conversation (audio -> STT -> Gemini -> JSON).
-- POST /api/voice/stt_only      : STT only (used by the dashboard chat).
 """
 
 import logging
@@ -260,42 +259,3 @@ def listen():
         "transcript": transcription,
         "answer": answer_text,
     }), 200
-
-
-@voice_bp.route("/api/voice/stt_only", methods=["POST"])
-def stt_only():
-    """STT-only endpoint used by the dashboard's audio chat.
-
-    The dashboard sends a clean WAV recorded by the browser (no M5 mic
-    transient), so it bypasses the trim/normalize logic of ``tts/stt.py`` and
-    calls Google STT directly with auto-detected format.
-    """
-    if "audio" in request.files:
-        audio_bytes = request.files["audio"].read()
-    else:
-        audio_bytes = request.get_data()
-
-    if not audio_bytes:
-        return jsonify({"error": "No audio received."}), 400
-
-    try:
-        from google.cloud import speech
-        client = speech.SpeechClient()
-
-        audio = speech.RecognitionAudio(content=audio_bytes)
-        recog_cfg = speech.RecognitionConfig(
-            language_code="fr-FR",
-            enable_automatic_punctuation=True,
-        )
-        response = client.recognize(config=recog_cfg, audio=audio)
-
-        transcript_parts = []
-        for result in response.results:
-            if result.alternatives:
-                transcript_parts.append(result.alternatives[0].transcript)
-        text = " ".join(transcript_parts).strip()
-
-        return jsonify({"status": "ok", "text": text}), 200
-    except Exception as e:
-        logger.error("STT error: %s", e)
-        return jsonify({"error": f"STT service unavailable: {e}"}), 503

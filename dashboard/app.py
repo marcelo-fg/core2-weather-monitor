@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import datetime
 import json
-from services.api_client import get_latest, get_history, get_weather, ask_llm, post_device_command, post_stt_only
+from services.api_client import get_latest, get_history, get_weather, ask_llm, post_device_command
 
 st.set_page_config(
     page_title="Core2 Weather Monitor",

@@ -86,12 +86,10 @@ The system follows a strict **three-tier architecture**:
    device then plays the sentence through `/api/voice/tts.wav`.
 
 6. **Dashboard.** The Streamlit dashboard calls the middleware's REST API to
-   display real-time telemetry, 24-hour and weekly charts, weather, AI
-   insights (`POST /api/voice/query`) and a text chat with the assistant
-   (`POST /api/voice/stt_only` for browser audio + `POST /api/voice/query`).
-   The Remote page also sends commands to the device via
-   `POST /api/device/command`; the device drains the queue every 5 seconds
-   with `GET /api/device/sync`.
+   display real-time telemetry, 24-hour and weekly charts, weather and AI
+   insights (`POST /api/voice/query`). The Remote page also sends commands
+   to the device via `POST /api/device/command`; the device drains the
+   queue every 5 seconds with `GET /api/device/sync`.
 
 ### External services & APIs
 
@@ -302,6 +300,11 @@ neither of us worked in complete isolation on any single feature.
 
 ---
 
-## Demo video
+## Links
 
-https://youtu.be/016uSePRMRY
+| Resource | URL |
+| --- | --- |
+| **GitHub repository** | https://github.com/marcelo-fg/core2-weather-monitor |
+| **Live dashboard** | https://core2-dashboard-337108994948.europe-west1.run.app |
+| **Live middleware (REST API)** | https://core2-middleware-337108994948.europe-west1.run.app |
+| **Demo video** | https://youtu.be/LKbeKhHTqtg |
