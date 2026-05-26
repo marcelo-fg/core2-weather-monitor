@@ -707,7 +707,7 @@ def _page_standby(data, full=True):
         try:
             # Shift everything to center. Center is 160.
             # Temp text ~ 100px, Icon ~ 50px. 
-            lcd.image(185, 150, _weather_icon_path(icon, big=True))
+            lcd.image(200, 150, _weather_icon_path(icon, big=True))
         except:
             pass
             
