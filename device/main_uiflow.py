@@ -578,35 +578,40 @@ def _page_settings(data):
     lcd.print("Middleware: " + ("OK" if mw_ok else "ERROR"), 15, 65, COL_GREEN if mw_ok else COL_RED)
     lcd.print("Sensors: " + ("OK" if sns_ok else "ERROR"), 170, 65, COL_GREEN if sns_ok else COL_RED)
     
-    lcd.print("Saved WiFi Networks (Touch to connect):", 15, 90, COL_WHITE)
+    cur_ssid = data.get("wifi_ssid") or "?"
+    lcd.print("Current WiFi: " + cur_ssid[:18], 15, 85, COL_GREEN)
+    
+    lcd.print("Saved WiFi Networks:", 15, 110, COL_WHITE)
     
     history = data.get("wifi_history", [])
-    y = 110
+    y = 125
     if not history:
         lcd.print("No saved networks.", 15, y, COL_GRAY)
-        y += 20
+        y += 18
     else:
+        # Filter out current from history visually, or just show top 3
         for idx, net in enumerate(history):
+            if idx >= 3: break
             ssid = net.get("ssid", "")
-            is_cur = (ssid == data.get("wifi_ssid"))
+            is_cur = (ssid == cur_ssid)
             col = COL_GREEN if is_cur else COL_WHITE
             prefix = "> " if is_cur else "  "
             lcd.print(prefix + ssid[:25], 15, y, col)
-            y += 20
+            y += 18
             
     lcd.print("+ Scan New WiFi (Setup)", 15, y, COL_BLUE)
             
-    # Brightness Touch Buttons
+    # Brightness Touch Buttons (Border only, centered text)
     lcd.rect(15, 190, 60, 35, COL_BLUE, COL_BG)
     lcd.font(FONT_LARGE)
-    lcd.print("-", 35, 197, COL_WHITE)
+    lcd.print("-", 38, 197, COL_WHITE)
     
     lcd.font(FONT_TINY)
-    lcd.print("BRIGHTNESS", 95, 202, COL_WHITE)
+    lcd.print("BRIGHTNESS", 90, 202, COL_WHITE)
     
     lcd.rect(180, 190, 60, 35, COL_BLUE, COL_BG)
     lcd.font(FONT_LARGE)
-    lcd.print("+", 200, 197, COL_WHITE)
+    lcd.print("+", 201, 198, COL_WHITE)
 
 def _page_voice(data):
     lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
@@ -693,15 +698,22 @@ def _page_standby(data, full=True):
         icon = data.get("weather", {}).get("current", {}).get("condition", "Clear")
         temp = data.get("weather", {}).get("current", {}).get("temp")
         
+        icon_color = COL_WHITE
+        if icon in ["Clear", "Sunny"]: icon_color = 0xFFD700
+        elif icon in ["Clouds", "Cloudy", "Overcast"]: icon_color = 0xAAAAAA
+        elif icon in ["Rain", "Drizzle", "Showers"]: icon_color = 0x00A0FF
+        elif icon in ["Thunderstorm"]: icon_color = 0x800080
+        
         try:
-            # 50x50 icon, center is at X=135 (320/2 - 25)
-            lcd.image(135, 155, _weather_icon_path(icon, big=True))
+            # Shift everything to center. Center is 160.
+            # Temp text ~ 60px, Icon ~ 50px. 
+            lcd.image(155, 155, _weather_icon_path(icon, big=True))
         except:
             pass
             
         if temp is not None:
-            lcd.font(FONT_SMALL)
-            lcd.print("{:.1f}C".format(temp), 70, 165, COL_WHITE)
+            lcd.font(FONT_MEDIUM)
+            lcd.print("{:.1f}C".format(temp), 80, 165, icon_color)
     else:
         # Only update the time area to prevent flickering the image/date
         lcd.rect(15, 95, 290, 50, COL_BG, COL_BG)
@@ -1465,8 +1477,8 @@ def main():
                     
                     # WiFi selection
                     wifi_hist = _wifi_get_history()
-                    idx = (ty - 110) // 20
-                    if 0 <= idx < len(wifi_hist):
+                    idx = (ty - 125) // 18
+                    if 0 <= idx < min(len(wifi_hist), 3):
                         net = wifi_hist[idx]
                         screen_show_loading("Connecting to " + net.get("ssid", "")[:15] + "...")
                         wifi_connect(net.get("ssid"), net.get("password"))
@@ -1474,7 +1486,7 @@ def main():
                         screen_render(page, data, is_standby)
                         utime.sleep_ms(300)
                         continue
-                    elif idx == len(wifi_hist) or (not wifi_hist and idx == 1):
+                    elif idx == min(len(wifi_hist), 3) or (not wifi_hist and idx == 0):
                         screen_show_loading("Switching WiFi...")
                         wifi_cycle()
                         data = build_display_data(indoor, weather, history, ntp_now())
