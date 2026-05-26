@@ -224,7 +224,25 @@ def stt_only():
         return jsonify({"error": "Aucun audio reçu."}), 400
 
     try:
-        transcription = stt.transcribe_wav(audio_bytes)
+        from google.cloud import speech
+        client = speech.SpeechClient()
+        
+        # Streamlit sends a standard WAV file. Google STT can auto-detect WAV 
+        # (with LINEAR16 encoding) if we simply pass the content and language.
+        audio = speech.RecognitionAudio(content=audio_bytes)
+        config = speech.RecognitionConfig(
+            language_code="fr-FR",
+            enable_automatic_punctuation=True
+        )
+        
+        response = client.recognize(config=config, audio=audio)
+        
+        morceaux = []
+        for result in response.results:
+            if result.alternatives:
+                morceaux.append(result.alternatives[0].transcript)
+        transcription = " ".join(morceaux).strip()
+        
         return jsonify({"status": "ok", "text": transcription}), 200
     except Exception as e:
         logger.error(f"STT Error: {e}")
