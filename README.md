@@ -169,7 +169,7 @@ The following are intentionally **not** in the repository (see `.gitignore`):
 device WiFi credentials (`device/wifi_creds.json`), local credentials
 (`device/config.py`, `*.env`, `application_default_credentials.json`,
 `*-service-account*.json`), the runtime TTS audio cache
-(`middleware/static/audio/`), virtualenvs, and dev-tool config (`.claude/`).
+(`middleware/static/audio/`), virtualenvs, and local dev-tool configs.
 
 ---
 
