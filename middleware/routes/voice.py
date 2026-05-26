@@ -104,12 +104,13 @@ def device_command():
 def tts_wav():
     """Stream raw WAV audio (used by cache or direct text)."""
     text = request.args.get("text", "").strip()
+    lang = request.args.get("lang", None)
     if not text:
         return "No text", 400
         
     try:
         t0 = time.time()
-        audio_bytes = service.get_audio(text)
+        audio_bytes = service.get_audio(text, lang_code=lang)
         logger.info("TTS.wav: %d octets en %.2fs (texte %d car.)",
                     len(audio_bytes), time.time() - t0, len(text))
         return Response(audio_bytes, mimetype="audio/wav")
@@ -146,6 +147,37 @@ def announce():
         "status": "ok",
         "text": text
     }), 200
+
+@voice_bp.route("/api/voice/smart_welcome", methods=["GET"])
+def smart_welcome():
+    """
+    Generate an English 1-sentence smart welcome based on live context.
+    Returns JSON with the text, which the device will then pass to TTS.
+    """
+    context = _build_live_context()
+    
+    # Fast-path : si tout est normal, on saute l'IA pour gagner 4 secondes !
+    is_normal = True
+    if context.get("tvoc", 0) > 500: is_normal = False
+    if context.get("eco2", 0) > 1000: is_normal = False
+    if context.get("temperature", 20) > 30 or context.get("temperature", 20) < 15: is_normal = False
+    desc = context.get("outdoor_desc", "").lower()
+    if "storm" in desc or "rain" in desc or "snow" in desc: is_normal = False
+    
+    if is_normal:
+        text = "Welcome back, everything is normal."
+    else:
+        prompt = (
+            "The user just walked into the room. Give a 1-sentence welcome message in English. "
+            "Briefly warn about the specific critical value (e.g., extreme heat, incoming storm, or bad air quality)."
+        )
+        try:
+            text = llm.generate_reply(prompt, context)
+        except Exception as e:
+            logger.error(f"LLM smart_welcome error: {e}")
+            text = "Welcome back, everything is normal."
+        
+    return jsonify({"status": "ok", "text": text}), 200
 
 @voice_bp.route("/api/voice/query", methods=["POST"])
 def query():
@@ -191,7 +223,7 @@ def listen():
 
     if not transcription:
         # Fallback if no voice was detected
-        reponse_texte = "Désolé, je n'ai pas bien compris. Pouvez-vous répéter ?"
+        reponse_texte = "Sorry, I didn't catch that. Could you repeat?"
         transcription = "..."
     else:
         try:

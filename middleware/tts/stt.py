@@ -152,6 +152,7 @@ def transcribe_wav(audio_bytes):
         sample_rate_hertz=sr,
         audio_channel_count=(ch if ch in (1, 2) else 1),
         language_code=config.STT_LANGUAGE_CODE,
+        alternative_language_codes=["en-US", "fr-FR"],
         enable_automatic_punctuation=True,
         speech_contexts=[speech.SpeechContext(phrases=_PHRASES_METEO, boost=15.0)],
     )

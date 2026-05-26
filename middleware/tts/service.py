@@ -71,7 +71,7 @@ def _get_client():
     return _client
 
 
-def synthesize_to_wav(text):
+def synthesize_to_wav(text, lang_code=None):
     """Transforme un texte français en audio WAV (octets) via Google.
 
     Paramètre :
@@ -92,9 +92,16 @@ def synthesize_to_wav(text):
     synthesis_input = texttospeech.SynthesisInput(text=text)
 
     # 2) On choisit la voix : code de langue + nom de la voix WaveNet.
+    # Si lang_code est spécifié, on utilise une voix par défaut pour cette langue.
+    actual_lang = lang_code if lang_code else config.TTS_LANGUAGE_CODE
+    if not lang_code or lang_code == config.TTS_LANGUAGE_CODE:
+        actual_voice = config.TTS_VOICE_NAME
+    else:
+        actual_voice = "en-US-Journey-F" if "en" in lang_code else config.TTS_VOICE_NAME
+    
     voice = texttospeech.VoiceSelectionParams(
-        language_code=config.TTS_LANGUAGE_CODE,
-        name=config.TTS_VOICE_NAME,
+        language_code=actual_lang,
+        name=actual_voice,
     )
 
     # 3) On configure le format de sortie.
@@ -117,7 +124,7 @@ def synthesize_to_wav(text):
     return response.audio_content
 
 
-def get_audio(text):
+def get_audio(text, lang_code=None):
     """Retourne l'audio WAV d'un texte, en utilisant le cache si possible.
 
     C'est la fonction "principale" appelée par les routes Flask.
@@ -142,7 +149,7 @@ def get_audio(text):
         return audio_en_cache
 
     # 2) Pas en cache : on appelle Google.
-    audio_bytes = synthesize_to_wav(text)
+    audio_bytes = synthesize_to_wav(text, lang_code=lang_code)
 
     # 3) On sauvegarde pour les prochaines fois, puis on renvoie.
     cache.save_audio(text, audio_bytes)

@@ -1000,14 +1000,27 @@ def _urlencode(s):
             out += "%" + HEX[b >> 4] + HEX[b & 15]
     return out
 
-def voice_speak(text):
+def voice_speak(text, lang=None):
     if not text: return
     try:
-        preparer_audio()
         import gc; gc.collect()
         url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(text[:150])
-        speaker.playCloudWAV(url)
-        utime.sleep_ms(500)
+        if lang:
+            url += "&lang=" + lang
+            
+        import urequests
+        r = urequests.get(url)
+        ok = (r.status_code == 200)
+        if ok:
+            with open(FICHIER_REPONSE, "wb") as f2:
+                while True:
+                    chunk = r.raw.read(512)
+                    if not chunk: break
+                    f2.write(chunk)
+        r.close()
+        
+        if ok:
+            jouer_wav(FICHIER_REPONSE)
     except Exception as e:
         print("[voice] TTS Error", e)
 
@@ -1059,7 +1072,7 @@ def voice_listen_flow(data_dict):
                     recu = 0
                     with open(FICHIER_REPONSE, "wb") as f2:
                         while True:
-                            chunk = r2.raw.read(512)   # 512 o a la fois -> RAM minimale
+                            chunk = r2.raw.read(512)
                             if not chunk:
                                 break
                             f2.write(chunk)
@@ -1403,6 +1416,7 @@ def main():
     last_interaction = utime.time()
     is_standby = False
     last_pir_state = 0
+    last_smart_welcome_time = 0   # Cooldown for motion announcements
     a_press_start = 0     # instant (ticks_ms) du debut d'appui sur A (0 = relache)
 
     while True:
@@ -1522,6 +1536,21 @@ def main():
                 is_standby = False
                 set_screen_brightness(100)
                 screen_render(page, build_display_data(indoor, weather, history, ntp_now()), False, True)
+                
+                # Smart Welcome Voice Announcement with 10s cooldown for testing
+                if now - last_smart_welcome_time > 10:
+                    preparer_audio()  # Allume l'amplificateur plus tôt pour éviter que le début de la phrase soit coupé
+                    try:
+                        import urequests
+                        res = urequests.get(MIDDLEWARE_URL + "/api/voice/smart_welcome")
+                        if res.status_code == 200:
+                            data = res.json()
+                            if data.get("status") == "ok":
+                                voice_speak(data.get("text", "Welcome back."))
+                        res.close()
+                    except Exception as e:
+                        print("Smart welcome error:", e)
+                    last_smart_welcome_time = utime.time()
         elif current_pir == 1:
             pass
             
