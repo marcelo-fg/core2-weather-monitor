@@ -1,63 +1,68 @@
 """
-M5Stack Core2 – Indoor/Outdoor Weather Monitor
-Single-file version for UIFlow 1.15.2 (online, WiFi mode).
+M5Stack Core2 - Indoor/Outdoor Weather Monitor
 
-All modules are consolidated here because UIFlow web IDE does not support
-uploading custom .py files — everything must be in the main Python editor.
+Single-file MicroPython firmware for UIFlow 1.15.2 (online, WiFi mode).
+Everything is consolidated in this single file because the UIFlow web IDE
+does not let you upload custom modules.
 
 Sections:
-  [1] UIFlow imports
-  [2] Configuration (edit these!)
-  [3] NTP sync
-  [4] Sensors (ENV III, TVOC, PIR)
-  [5] Display / Screen manager (4 pages)
-  [6] Weather (OpenWeatherMap)
-  [7] Cloud (BigQuery via middleware)
-  [8] Voice (TTS / STT / LLM Q&A)
-  [9] WiFi manager (in-app switching for iot-unil)
+  [1]  UIFlow imports
+  [2]  Configuration
+  [3]  NTP sync
+  [4]  Sensors (ENV III, TVOC, PIR)
+  [5]  Display / screen manager (5 pages + standby)
+  [6]  Weather (OpenWeatherMap via middleware)
+  [7]  Cloud (BigQuery via middleware)
+  [8]  Voice (TTS / STT / LLM via middleware)
+  [8b] Device polling (Remote control commands)
+  [9]  WiFi manager (in-app network switching)
   [10] Alert logic
   [11] Main loop
+
+WiFi is handled entirely by UIFlow / M5Burner — no SSID or password is
+hardcoded in this file.
 """
 
 # =============================================================================
 # [1] UIFlow 1.15.2 required imports
 # =============================================================================
-from m5stack import *   # lcd, btnA, btnB, btnC, speaker
-from m5ui import *      # M5UI components (labels, rects, etc.)
-# Note: 'from uiflow import *' is intentionally omitted — it triggers a
-# UIFlow cloud API key check that we don't need (we use no EzData/IFTTT).
+from m5stack import *   # lcd, btnA, btnB, btnC, speaker, rgb
+from m5ui import *      # M5UI components (labels, rectangles, ...)
+# Note: ``from uiflow import *`` is intentionally omitted - it triggers a
+# UIFlow cloud API key check that we do not need (no EzData / IFTTT).
 import urequests
 import ujson
 import utime
 import unit
 
 # =============================================================================
-# [2] CONFIGURATION — edit these values before clicking Run
+# [2] CONFIGURATION
 # =============================================================================
 
-# WiFi (handled entirely by UIFlow and M5Burner configuration)
-IS_ONLINE     = False
+# Online status flag, updated by every cloud call.
+IS_ONLINE = False
 
-# Location
+# Location used for outdoor weather lookups.
 LOCATION        = "Lausanne,CH"
 TIMEZONE_OFFSET = 2  # CEST = UTC+2
 
-# Middleware (Flask API on Google Cloud Run — deployed!)
+# Flask middleware deployed on Google Cloud Run.
 MIDDLEWARE_URL = "https://core2-middleware-337108994948.europe-west1.run.app"
 
+# Screen brightness (0-100) — kept in a module global so the Settings page
+# can adjust it relative to the current value.
 current_brightness = 50
 
+
 def set_screen_brightness(level):
-    """Safely attempts to set screen brightness (0-100) across different M5Stack API versions"""
+    """Set screen brightness (0-100) across multiple M5Stack firmware APIs."""
     global current_brightness
     current_brightness = max(0, min(100, int(level)))
     try:
-        # Core2 axp global object
         axp.setLcdBrightness(current_brightness)
         return
     except: pass
     try:
-        # Older core M5Stack
         power.setLCDBrightness(level)
         return
     except: pass
@@ -70,16 +75,14 @@ def set_screen_brightness(level):
         lcd.setBrightness(int(level * 255 / 100))
         return
     except: pass
-    
 
 
-# External APIs
+# External APIs. The OpenWeather key is only used as a degraded fallback when
+# the middleware is unreachable; the middleware is the primary weather source.
 OPENWEATHER_API_KEY = "REMOVED_FOR_SECURITY"
-# Note: Gemini LLM and Google TTS are handled server-side by the middleware.
-
 
 # Alert thresholds
-ALERT_HUMIDITY_MIN = 40    # % — too dry indoors
+ALERT_HUMIDITY_MIN = 40    # %  - too dry indoors
 ALERT_TVOC_MAX     = 500   # ppb
 ALERT_ECO2_MAX     = 1000  # ppm
 
@@ -87,9 +90,12 @@ ALERT_ECO2_MAX     = 1000  # ppm
 SENSOR_READ_INTERVAL     = 30
 CLOUD_UPLOAD_INTERVAL    = 300    # 5 min
 WEATHER_REFRESH_INTERVAL = 1800   # 30 min
-ANNOUNCE_COOLDOWN        = 3600   # 1 h — motion TTS cooldown
+ANNOUNCE_COOLDOWN        = 3600   # 1 h
 DISPLAY_TICK             = 30     # screen refresh
 CLOCK_TICK               = 1      # clock refresh
+
+# WiFi reconnection timeout (used by the in-app WiFi switcher).
+WIFI_TIMEOUT = 15
 
 # Display dimensions
 SCREEN_W = 320
@@ -100,7 +106,7 @@ COL_YELLOW = 0xFFEB3B   # warnings
 COL_BLUE   = 0x64B5F6   # outdoor accent
 COL_GRAY   = 0x607D8B   # secondary text
 COL_TOPBAR = 0x1565C0   # top navigation bar
-COL_BG     = 0x000000   # Fond noir
+COL_BG     = 0x000000   # black background
 COL_PANEL  = 0x1b263b
 COL_WHITE  = 0xffffff
 COL_AMBER  = 0xFF9F00   # temperature
@@ -114,15 +120,20 @@ FONT_MEDIUM = lcd.FONT_DejaVu24
 FONT_LARGE  = lcd.FONT_DejaVu40
 FONT_TINY   = lcd.FONT_DefaultSmall
 
+
 # =============================================================================
 # [3] NTP SYNC
 # =============================================================================
+
 _DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
 
 def ntp_sync(silent=False):
-    """Sync device clock strictly using NTP as required.
-    ntp_now() always adds TIMEZONE_OFFSET for local display.
+    """Synchronize the device clock with local time.
+
+    Primary source: the middleware's /api/time endpoint, which returns the
+    correct local time for Europe/Zurich. Falls back to a raw NTP query if
+    the middleware is unreachable.
     """
     if not silent:
         lcd.clear(COL_BG)
@@ -131,36 +142,36 @@ def ntp_sync(silent=False):
 
     import network
     wlan = network.WLAN(network.STA_IF)
-    """Synchronize the external BM8563 RTC directly to LOCAL time via Middleware."""
     if not silent:
         lcd.font(FONT_TINY)
         lcd.print("1) Cloud Middleware...", lcd.CENTER, 110, COL_GRAY)
-        
+
     try:
-        # Fetch exact local time from our own middleware
+        # Fetch the exact local time from our middleware.
         data = _cloud_get("/api/time")
         if data and "datetime" in data:
             dt = data["datetime"]
             if len(dt) >= 19:
                 yy, mo, dd = int(dt[0:4]), int(dt[5:7]), int(dt[8:10])
                 hh, mm, ss = int(dt[11:13]), int(dt[14:16]), int(dt[17:19])
-                
-                # We do not have weekday from our API currently, just pass 0
-                day_of_week = 0 
-                
-                # Write EXACT local time directly to the BM8563 external RTC
+
+                # We do not have the weekday from our API, pass 0.
+                day_of_week = 0
+
+                # Write LOCAL time directly to the BM8563 external RTC.
                 try:
                     from m5stack import rtc
                     rtc.datetime((yy, mo, dd, day_of_week, hh, mm, ss))
                 except: pass
-                
-                # Write to internal ESP32 RTC as backup
+
+                # Write to the internal ESP32 RTC as a backup.
                 try:
                     import machine
                     machine.RTC().datetime((yy, mo, dd, 0, hh, mm, ss, 0))
                 except: pass
 
-                # Silent NTP call just to satisfy academic project requirements (updates internal epoch)
+                # Silent NTP call to satisfy academic project requirements
+                # (updates the internal epoch).
                 try:
                     import ntptime
                     ntptime.settime()
@@ -175,7 +186,7 @@ def ntp_sync(silent=False):
         if not silent:
             lcd.print("API err: " + str(e)[:22], lcd.CENTER, 110, COL_RED)
 
-    # Fallback to pure NTP if middleware is unreachable
+    # Fallback to a direct NTP query if the middleware is unreachable.
     if not silent:
         lcd.print("2) M5 RTC NTP...", lcd.CENTER, 130, COL_GRAY)
     try:
@@ -187,16 +198,17 @@ def ntp_sync(silent=False):
                 lcd.print("RTC NTP OK!", lcd.CENTER, 130, COL_GREEN)
                 utime.sleep(1)
             return True
-    except Exception as e:
+    except Exception:
         pass
 
     if not silent:
         utime.sleep(2)
     return False
 
+
 def ntp_now():
-    """Return local time dict by reading strictly from the RTCs which now hold local time."""
-    # 1. Primary: External M5Stack Core2 RTC (BM8563)
+    """Return a dict with the current local time, read from the RTC."""
+    # Primary: external M5Stack Core2 RTC (BM8563).
     try:
         from m5stack import rtc
         t = rtc.datetime()
@@ -210,7 +222,7 @@ def ntp_now():
     except:
         pass
 
-    # 2. Fallback: Internal ESP32 RTC (if WorldTimeAPI set it)
+    # Fallback: internal ESP32 RTC.
     t = utime.localtime()
     return {
         "yy":  t[0], "mo": t[1], "dd": t[2],
@@ -224,7 +236,6 @@ def is_morning():
     return 6 <= ntp_now()["h"] < 10
 
 
-
 # =============================================================================
 # [4] SENSORS (ENV III + TVOC + PIR)
 # =============================================================================
@@ -235,11 +246,12 @@ _pir  = None
 
 
 def sensors_init():
+    """Initialize the three sensors on their respective Grove ports."""
     global _env3, _tvoc, _pir
     for name, sensor_type, port in [
-        ("ENV3", unit.ENV3, unit.PORTA),   # Temp + Humidity
-        ("TVOC", unit.TVOC, unit.PORTC),   # Air quality → PORT C
-        ("PIR",  unit.PIR,  unit.PORTB),   # Motion sensor → PORT B
+        ("ENV3", unit.ENV3, unit.PORTA),   # Temperature + humidity
+        ("TVOC", unit.TVOC, unit.PORTC),   # Air quality (TVOC / eCO2)
+        ("PIR",  unit.PIR,  unit.PORTB),   # Motion detector
     ]:
         try:
             s = unit.get(sensor_type, port)
@@ -252,6 +264,7 @@ def sensors_init():
 
 
 def _aq_label(tvoc):
+    """Map a TVOC value (ppb) to a coarse air-quality label."""
     if tvoc is None:   return "Unknown"
     if tvoc < 220:     return "Good"
     if tvoc < 660:     return "Moderate"
@@ -260,7 +273,7 @@ def _aq_label(tvoc):
 
 
 def sensors_read():
-    """Return dict with temperature, humidity, tvoc, eco2, aq_label."""
+    """Return a dict with the latest indoor sensor values."""
     temp, humi, tvoc, eco2 = None, None, None, None
     if _env3:
         try:
@@ -290,27 +303,17 @@ def sensors_read():
     }
 
 
-def motion_detected():
-    if not _pir:
-        return False
-    try:
-        return _pir.state == 1
-    except Exception:
-        return False
-
-
-
-
 # =============================================================================
 # [5] DISPLAY / SCREEN MANAGER
-
 # =============================================================================
 
 NUM_PAGES = 5  # 0=Home, 1=Forecast, 2=History, 3=Settings, 4=Voice
 
 _screen_alerts = []
 
+
 def _weather_icon_path(condition, big=False):
+    """Map an OpenWeather ``condition`` string to a local icon file path."""
     mapping = {
         "Clear": "clear", "Clouds": "clouds", "Rain": "rain",
         "Drizzle": "rain", "Thunderstorm": "storm", "Snow": "snow",
@@ -320,50 +323,52 @@ def _weather_icon_path(condition, big=False):
         return "res/" + basename + "_big.jpg"
     return "res/" + basename + "_v2.jpg"
 
+
 def _aq_color(label):
+    """Map an air-quality label to the colour used to render it."""
     return {
         "Good": COL_GREEN, "Moderate": COL_YELLOW,
         "Poor": COL_AMBER, "Hazardous": COL_RED,
     }.get(label, COL_GRAY)
 
+
 def screen_set_alerts(alerts):
     global _screen_alerts
     _screen_alerts = alerts
+
 
 def screen_show_loading(msg="Loading..."):
     lcd.clear(COL_BG)
     lcd.font(FONT_MEDIUM)
     lcd.print(msg, lcd.CENTER, 100, COL_CYAN)
 
+
 def screen_show_error(msg):
     lcd.font(FONT_SMALL)
     lcd.print(msg[:40], 5, 220, COL_RED)
 
+
 def _draw_nav_bar(page):
-    # Dessin de la Top Bar
-    lcd.rect(10, 5, 300, 24, COL_WHITE, COL_BG) # Contour blanc, fond noir
+    """Draw the top navigation bar with the currently selected page highlighted."""
+    lcd.rect(10, 5, 300, 24, COL_WHITE, COL_BG)
     labels = ["HOME", "FORECAST", "HISTORY", "SETTINGS"]
     x = 18
     for i, label in enumerate(labels):
-        if i == page:
-            lcd.font(FONT_TINY)
-            lcd.print(label, x, 10, COL_BLUE)
-        else:
-            lcd.font(FONT_TINY)
-            lcd.print(label, x, 10, COL_WHITE)
+        lcd.font(FONT_TINY)
+        col = COL_BLUE if i == page else COL_WHITE
+        lcd.print(label, x, 10, col)
         x += 75
-        
-    # Online/Offline LED indicator (M5Go side bars)
+
+    # Online/Offline LED indicator (M5Go side bars).
     try:
         from m5stack import rgb
-        if IS_ONLINE:
-            rgb.setColorAll(0x001100) # Dim green
-        else:
-            rgb.setColorAll(0x110000) # Dim red
+        rgb.setColorAll(0x001100 if IS_ONLINE else 0x110000)
     except Exception:
         pass
 
+
 def _draw_alerts():
+    """Render the active alerts as a red banner at the bottom of the screen."""
     if not _screen_alerts:
         return
     msg = " | ".join(_screen_alerts)
@@ -371,10 +376,12 @@ def _draw_alerts():
     lcd.font(FONT_TINY)
     lcd.print(msg[:52], 4, 225, COL_WHITE)
 
+
 def _page_home(data):
     _draw_outdoor_card(data)
     _draw_indoor_card(data)
     _draw_alerts()
+
 
 def _draw_indoor_card(data):
     temp = data.get("temperature")
@@ -382,9 +389,9 @@ def _draw_indoor_card(data):
     eco2 = data.get("eco2")
     aq   = data.get("aq_label", "N/A")
     aq_col = _aq_color(aq)
-    
+
     x, y, w, h = 165, 35, 145, 180
-    lcd.rect(x, y, w, h, COL_CYAN, COL_BG) # Contour cyan, fond noir
+    lcd.rect(x, y, w, h, COL_CYAN, COL_BG)
     lcd.font(FONT_SMALL)
     lcd.print("INDOOR", x+15, y+15, COL_CYAN)
     lcd.font(FONT_LARGE)
@@ -395,16 +402,16 @@ def _draw_indoor_card(data):
     lcd.print("{} ppm CO2".format(eco2) if eco2 is not None else "-- ppm", x+15, y+125, COL_WHITE)
     lcd.print("{} air quality".format(aq), x+15, y+150, aq_col)
 
+
 def _draw_outdoor_card(data):
     weather = data.get("weather", {}).get("current", {})
-    icon_path = _weather_icon_path(weather.get("condition", ""))
     temp = weather.get("temp")
     feels = weather.get("feels_like")
     humi = weather.get("humidity")
     wind = weather.get("wind_speed")
-    
+
     x, y, w, h = 10, 35, 145, 180
-    lcd.rect(x, y, w, h, COL_AMBER, COL_BG) # Contour orange, fond noir
+    lcd.rect(x, y, w, h, COL_AMBER, COL_BG)
     lcd.font(FONT_SMALL)
     lcd.print("OUTDOOR", x+15, y+15, COL_AMBER)
     lcd.font(FONT_LARGE)
@@ -418,16 +425,16 @@ def _draw_outdoor_card(data):
 def _page_forecast(data):
     forecast = data.get("weather", {}).get("forecast", {})
     if isinstance(forecast, list):
-        # Fallback raw OWM data is a list
+        # Raw OWM fallback returns a list.
         hourly = []
         daily = forecast
     else:
         hourly = forecast.get("hourly", [])
         daily = forecast.get("daily", [])
-    
-    # Bloc horaire en haut (hauteur réduite)
+
+    # Hourly block at the top.
     lcd.rect(10, 35, 300, 65, COL_BLUE, COL_BG)
-    
+
     if not hourly:
         lcd.font(FONT_SMALL)
         lcd.print("No forecast", 100, 60, COL_GRAY)
@@ -437,34 +444,33 @@ def _page_forecast(data):
             lcd.font(FONT_TINY)
             lcd.print(h.get("time", "?"), x, 40, COL_WHITE)
             try:
-                # Icon size is 20x20 now
                 lcd.image(x+5, 55, _weather_icon_path(h.get("condition", "")))
             except: pass
             lcd.font(FONT_TINY)
             t = h.get("temp")
             lcd.print("{}C".format(int(t) if t is not None else "--"), x+5, 82, COL_WHITE)
-        
-    # 5-DAY FORECAST 
+
+    # 5-day forecast.
     lcd.rect(10, 105, 300, 134, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
     lcd.print("5 DAY FORECAST", 15, 110, COL_BLUE)
-    
-    # Calculate global min/max for proportional gauges
+
+    # Compute global min/max for proportional gauges.
     if daily:
         g_min = min([d.get("temp_min", 0) for d in daily[:6]])
         g_max = max([d.get("temp_max", 0) for d in daily[:6]])
         if g_max == g_min: g_max += 1
     else:
         g_min, g_max = 0, 1
-        
+
     gauge_x = 140
     gauge_w = 115
-    
+
     y = 125
     for i, day in enumerate(daily[:6]):
         lcd.font(FONT_TINY)
         day_name = day.get("day_name", "?")
-        if i == 0: 
+        if i == 0:
             day_name = "Today"
         else:
             day_name = day_name[:3].upper()
@@ -472,73 +478,70 @@ def _page_forecast(data):
         try:
             lcd.image(80, y, _weather_icon_path(day.get("condition", "")))
         except: pass
-        
+
         t_min = day.get("temp_min", 0)
         t_max = day.get("temp_max", 0)
         lcd.print("{}C".format(int(t_min)), 110, y+2, COL_WHITE)
-        
-        # Piste de fond (Gris foncé)
+
+        # Background gauge track.
         lcd.rect(gauge_x, y+6, gauge_w, 3, COL_PANEL, COL_PANEL)
-        
-        # Segment proportionnel
+
+        # Proportional temperature segment.
         start_px = int((t_min - g_min) / (g_max - g_min) * gauge_w)
         width_px = int((t_max - t_min) / (g_max - g_min) * gauge_w)
         if width_px < 2: width_px = 2
         lcd.rect(gauge_x + start_px, y+6, width_px, 3, COL_AMBER, COL_AMBER)
-        
-        # Si c'est aujourd'hui, point de la temp actuelle
+
+        # For today, draw a dot at the current temperature.
         if i == 0:
             curr_t = hourly[0].get("temp", t_min) if hourly else t_min
             curr_t = max(t_min, min(t_max, curr_t))
             dot_px = int((curr_t - g_min) / (g_max - g_min) * gauge_w)
             lcd.circle(gauge_x + dot_px, y+7, 4, COL_WHITE, COL_WHITE)
-            
+
         lcd.print("{}C".format(int(t_max)), 265, y+2, COL_WHITE)
-        
+
         y += 18
         if y > 230: break
 
 
 def _page_history(data):
     history = data.get("history", {})
-    
-    # 1. Left Panel (Table of recent readings)
+
+    # Left panel: table of recent readings.
     lcd.rect(10, 35, 145, 200, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
     lcd.print("LATEST READINGS", 15, 42, COL_WHITE)
-    
+
     recent = history.get("recent", [])
     y = 65
-    
-    # Invert the list to show newest first
+
+    # Invert to show newest first.
     recent_newest = []
     for item in recent:
         recent_newest.insert(0, item)
-        
+
     for r in recent_newest[:7]:
         lcd.font(FONT_TINY)
         ts = r.get("timestamp", "")
-        # Format e.g. "05/26 13:00"
         if len(ts) >= 16:
             dt_str = "{}/{} {}".format(ts[5:7], ts[8:10], r.get("time_label", ""))
         else:
             dt_str = r.get("time_label", "")
-            
         lcd.print(dt_str, 15, y, COL_WHITE)
-        
+
         temp = r.get("temperature")
         t_str = "{:.1f}C".format(temp) if temp is not None else "--"
         lcd.print(t_str, 105, y, COL_AMBER)
-        
         y += 24
 
-    # 2. Top Right Panel (Humidity)
+    # Top-right panel: humidity ring.
     lcd.rect(160, 35, 150, 95, COL_BLUE, COL_BG)
     lcd.print("HUMIDITY LAST WEEK", 165, 42, COL_WHITE)
-    
+
     humi = history.get("humidity", 0)
     cx, cy, r, thick = 235, 85, 30, 10
-    
+
     import math
     lcd.circle(cx, cy, r, COL_WHITE, COL_WHITE)
     for a in range(0, int((humi / 100) * 360), 2):
@@ -547,22 +550,21 @@ def _page_history(data):
         y2 = cy + int(math.sin(rad) * (r - thick/2))
         lcd.circle(x2, y2, int(thick/2), COL_BLUE, COL_BLUE)
     lcd.circle(cx, cy, r - thick, COL_BG, COL_BG)
-    
+
     lcd.font(FONT_SMALL)
     lcd.print("{}%".format(humi), cx - 18, cy - 8, COL_WHITE)
-    
-    # 3. Bottom Right Panel (eCO2)
+
+    # Bottom-right panel: weekly eCO2 average.
     lcd.rect(160, 135, 150, 100, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
     lcd.print("eCO2 WEEKLY AVG", 165, 142, COL_WHITE)
-    
+
     eco2_val = history.get("eco2", 0)
     lcd.font(FONT_MEDIUM)
-    # Color coding for eCO2
     eco2_color = COL_GREEN
     if eco2_val > 1500: eco2_color = COL_RED
     elif eco2_val > 800: eco2_color = COL_AMBER
-    
+
     lcd.print(str(eco2_val) + " ppm", 175, 165, eco2_color)
 
 
@@ -571,25 +573,24 @@ def _page_settings(data):
     lcd.font(FONT_TINY)
     lcd.print("SETTINGS & STATUS", 15, 42, COL_BLUE)
     lcd.line(10, 55, 310, 55, COL_BLUE)
-    
+
     mw_ok = bool(data.get("weather"))
     sns_ok = data.get("sensors_ok", False)
-    
+
     lcd.print("Middleware: " + ("OK" if mw_ok else "ERROR"), 15, 65, COL_GREEN if mw_ok else COL_RED)
     lcd.print("Sensors: " + ("OK" if sns_ok else "ERROR"), 170, 65, COL_GREEN if sns_ok else COL_RED)
-    
+
     cur_ssid = data.get("wifi_ssid") or "?"
     lcd.print("Current WiFi: " + cur_ssid[:18], 15, 85, COL_GREEN)
-    
+
     lcd.print("Saved WiFi Networks:", 15, 110, COL_WHITE)
-    
+
     history = data.get("wifi_history", [])
     y = 125
     if not history:
         lcd.print("No saved networks.", 15, y, COL_GRAY)
         y += 18
     else:
-        # Filter out current from history visually, or just show top 3
         for idx, net in enumerate(history):
             if idx >= 3: break
             ssid = net.get("ssid", "")
@@ -598,127 +599,127 @@ def _page_settings(data):
             prefix = "> " if is_cur else "  "
             lcd.print(prefix + ssid[:25], 15, y, col)
             y += 18
-            
+
     lcd.print("+ Scan New WiFi (Setup)", 15, y, COL_BLUE)
-            
-    # Brightness Touch Buttons (Border only, centered text)
+
+    # Brightness touch buttons.
     lcd.rect(15, 190, 60, 35, COL_BLUE, COL_BG)
     lcd.font(FONT_LARGE)
     lcd.print("-", 35, 190, COL_WHITE)
-    
+
     lcd.font(FONT_SMALL)
     lcd.print("BRIGHTNESS", lcd.CENTER, 200, COL_WHITE)
-    
+
     lcd.rect(245, 190, 60, 35, COL_BLUE, COL_BG)
     lcd.font(FONT_LARGE)
     lcd.print("+", 262, 190, COL_WHITE)
+
 
 def _page_voice(data):
     lcd.rect(10, 35, 300, 195, COL_BLUE, COL_BG)
     lcd.font(FONT_TINY)
     lcd.print("VOICE ASSISTANT", 15, 42, COL_BLUE)
     lcd.line(10, 55, 310, 55, COL_BLUE)
-    
+
     voice_state = data.get("voice_state", "ready")
     transcript = data.get("transcript", "")
     answer = data.get("answer", "")
-    
-    if voice_state == "done":
-        # Affichage avec retour a la ligne pour NE PAS deborder de l'ecran (320 px).
-        lcd.font(FONT_TINY)            # petite police -> ~46 caracteres par ligne
 
-        def _wrap(texte, largeur):
-            """Decoupe 'texte' en lignes de 'largeur' caracteres max, en gardant
-            les mots entiers (coupe seulement les mots plus longs que la ligne)."""
-            lignes = []
-            courante = ""
-            for mot in str(texte).split(" "):
-                while len(mot) > largeur:           # mot trop long -> coupe brute
-                    if courante:
-                        lignes.append(courante); courante = ""
-                    lignes.append(mot[:largeur]); mot = mot[largeur:]
-                if courante == "":
-                    courante = mot
-                elif len(courante) + 1 + len(mot) <= largeur:
-                    courante += " " + mot
+    if voice_state == "done":
+        # Word-wrap the transcript and answer to fit the 320 px screen.
+        lcd.font(FONT_TINY)
+
+        def _wrap(text, width):
+            """Split ``text`` into lines of at most ``width`` characters,
+            keeping whole words together when possible."""
+            lines = []
+            current = ""
+            for word in str(text).split(" "):
+                while len(word) > width:
+                    if current:
+                        lines.append(current); current = ""
+                    lines.append(word[:width]); word = word[width:]
+                if current == "":
+                    current = word
+                elif len(current) + 1 + len(word) <= width:
+                    current += " " + word
                 else:
-                    lignes.append(courante); courante = mot
-            if courante:
-                lignes.append(courante)
-            return lignes
+                    lines.append(current); current = word
+            if current:
+                lines.append(current)
+            return lines
 
         y = 62
-        LH = 14          # hauteur de ligne (px)
-        YMAX = 225       # on s'arrete avant le bas du cadre
-        W = 46           # caracteres par ligne (FONT_TINY ~ 6 px/car sur ~290 px)
+        LH = 14            # line height (px)
+        YMAX = 225         # stop before the bottom of the panel
+        W = 46             # chars per line (FONT_TINY ~ 6 px/char over ~290 px)
 
         if transcript:
-            for ligne in _wrap("You: " + str(transcript), W):
+            for line in _wrap("You: " + str(transcript), W):
                 if y > YMAX: break
-                lcd.print(ligne, 15, y, COL_WHITE); y += LH
+                lcd.print(line, 15, y, COL_WHITE); y += LH
             y += 4
         if answer:
-            for ligne in _wrap("AI: " + str(answer), W):
+            for line in _wrap("AI: " + str(answer), W):
                 if y > YMAX: break
-                lcd.print(ligne, 15, y, COL_GREEN); y += LH
+                lcd.print(line, 15, y, COL_GREEN); y += LH
     else:
-        # Show robot at the bottom center
+        # Show the robot mascot at the bottom-center.
         try:
             lcd.image(120, 140, "res/robot_big.jpg")
         except: pass
-        
-        # Speech bubble
+
+        # Speech bubble.
         lcd.roundrect(60, 70, 200, 40, 10, COL_WHITE, COL_WHITE)
         lcd.triangle(150, 110, 170, 110, 160, 125, COL_WHITE, COL_WHITE)
-        
+
         lcd.font(FONT_SMALL)
         if voice_state == "listening":
             lcd.print("Listening...", 75, 80, COL_BG)
         elif voice_state == "thinking":
             lcd.print("Thinking...", 85, 80, COL_BG)
 
+
 def _page_standby(data, full=True):
     t = data.get("time", {})
     time_str = "%02d:%02d" % (t.get("h", 0), t.get("m", 0))
-    
+
     if full:
-        # Contour bleu et fond
         lcd.rect(10, 10, 300, 220, COL_BLUE, COL_BG)
-        
+
         mo_names = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
         mo = t.get("mo", 1)
         day_str = "{} {} {}".format(t.get("day", "").upper(), mo_names[mo], t.get("dd", 1))
-        
+
         lcd.font(FONT_MEDIUM)
         lcd.print(day_str, lcd.CENTER, 45, COL_WHITE)
-        
+
         lcd.font(FONT_LARGE)
         lcd.print(time_str, lcd.CENTER, 95, COL_WHITE)
-        
+
         icon = data.get("weather", {}).get("current", {}).get("condition", "Clear")
         temp = data.get("weather", {}).get("current", {}).get("temp")
-        
+
         icon_color = COL_WHITE
         if icon in ["Clear", "Sunny"]: icon_color = 0xFFD700
         elif icon in ["Clouds", "Cloudy", "Overcast"]: icon_color = 0xAAAAAA
         elif icon in ["Rain", "Drizzle", "Showers"]: icon_color = 0x00A0FF
         elif icon in ["Thunderstorm"]: icon_color = 0x800080
-        
+
         try:
-            # Shift everything to center. Center is 160.
-            # Temp text ~ 100px, Icon ~ 50px. 
             lcd.image(200, 150, _weather_icon_path(icon, big=True))
         except:
             pass
-            
+
         if temp is not None:
             lcd.font(FONT_LARGE)
             lcd.print("{:.1f}C".format(temp), 70, 155, icon_color)
     else:
-        # Only update the time area to prevent flickering the image/date
+        # Partial refresh: only repaint the time area to avoid flicker.
         lcd.rect(15, 95, 290, 50, COL_BG, COL_BG)
         lcd.font(FONT_LARGE)
         lcd.print(time_str, lcd.CENTER, 95, COL_WHITE)
+
 
 def screen_render(page, data, is_standby=False, full_refresh=True):
     if is_standby:
@@ -729,7 +730,7 @@ def screen_render(page, data, is_standby=False, full_refresh=True):
 
     if full_refresh:
         lcd.clear(COL_BG)
-        
+
     _draw_nav_bar(page)
     if page == 0:
         _page_home(data)
@@ -743,12 +744,9 @@ def screen_render(page, data, is_standby=False, full_refresh=True):
         _page_voice(data)
 
 
-
 # =============================================================================
-# [6] WEATHER (OpenWeatherMap)
-
+# [6] WEATHER (OpenWeatherMap via middleware, with direct fallback)
 # =============================================================================
-
 
 _OWM_BASE = "http://api.openweathermap.org/data/2.5"
 
@@ -777,12 +775,13 @@ def _fetch_weather_middleware():
 
 
 def _fetch_current_owm():
+    """Direct OpenWeather fallback when the middleware is unreachable."""
     url = "{}/weather?q={}&appid={}&units=metric".format(
         _OWM_BASE, LOCATION, OPENWEATHER_API_KEY)
     raw = _http_get(url)
     if raw is None:
         return None
-    # OWM returns {"cod": 401} when the key is invalid/not yet activated
+    # OWM returns ``{"cod": 401}`` when the key is invalid / not yet activated.
     if str(raw.get("cod", 200)) != "200":
         print("[weather] OWM error:", raw.get("message", "unknown"))
         return None
@@ -803,12 +802,12 @@ def _fetch_current_owm():
 
 
 def _fetch_forecast_owm():
+    """Direct OpenWeather forecast fallback (used when the middleware is down)."""
     url = "{}/forecast?q={}&appid={}&units=metric&cnt=40".format(
         _OWM_BASE, LOCATION, OPENWEATHER_API_KEY)
     raw = _http_get(url)
     if raw is None:
         return []
-    # Handle invalid/not-yet-active API key
     if str(raw.get("cod", 200)) not in ("200", "0"):
         print("[weather] OWM forecast error:", raw.get("message", "unknown"))
         return []
@@ -843,7 +842,7 @@ def _fetch_forecast_owm():
 
 
 def weather_get():
-    """Return {"current": {...}, "forecast": [...]} or {} on failure."""
+    """Return ``{"current": {...}, "forecast": [...]}`` or ``{}`` on failure."""
     data = _fetch_weather_middleware()
     if data:
         return data
@@ -907,13 +906,13 @@ def _cloud_get(path):
 
 
 def cloud_send(reading):
-    """Upload sensor reading to BigQuery via middleware."""
+    """Upload a sensor reading to BigQuery via the middleware."""
     result = _cloud_post("/api/sensor", reading)
     return result is not None and result.get("status") == "ok"
 
 
 def cloud_get_latest():
-    """Fetch most recent stored reading (used on boot to pre-populate screen)."""
+    """Fetch the most recent stored reading (used on boot to pre-populate the screen)."""
     data = _cloud_get("/api/sensor/latest")
     if data and "data" in data:
         return data["data"]
@@ -921,45 +920,28 @@ def cloud_get_latest():
 
 
 def cloud_get_history():
-    """Fetch history data for the History dashboard."""
+    """Fetch the data displayed on the History page."""
     data = _cloud_get("/api/sensor/history_weekly")
     hist = data["data"] if (data and "data" in data) else {}
-    
-    # Also fetch the most recent readings for the table
+
     recent = _cloud_get("/api/sensor/history?hours=12")
     if recent and "data" in recent:
         hist["recent"] = recent["data"]
-        
+
     return hist
 
 
 # =============================================================================
-# [8] VOICE (TTS / STT / LLM Q&A via middleware)
+# [8] VOICE (TTS / STT / LLM via middleware)
 # =============================================================================
 
-_HW_AVAILABLE = False
-try:
-    from m5stack import speaker
-    _HW_AVAILABLE = True
-except Exception:
-    print("[voice] speaker not available")
+VOICE_FILE       = "/flash/voice.wav"
+RESPONSE_FILE    = "/flash/response.wav"
+RECORD_DURATION_S = 5
 
-FICHIER_VOIX = "/flash/voix.wav"
-FICHIER_REPONSE = "/flash/reponse.wav"
-FICHIER_LOG = "/flash/debug.log"        # journal lisible via appui LONG sur le bouton A
-DUREE_ENREGISTREMENT_S = 5
 
-def log(msg):
-    """Affiche dans la console ET ajoute la ligne au journal /flash/debug.log.
-    Permet de relire les erreurs sur le M5 via un appui LONG sur le bouton A
-    (utile car UIFlow n'affiche pas les erreurs runtime une fois le code lance)."""
-    print(msg)
-    try:
-        with open(FICHIER_LOG, "a") as f:
-            f.write(str(msg) + "\n")
-    except: pass
-
-def preparer_audio():
+def prepare_audio():
+    """Enable the speaker amplifier and set the hardware volume to maximum."""
     try:
         import power
         power.setSpkEnable(True)
@@ -968,80 +950,96 @@ def preparer_audio():
         speaker.setVolume(100)
     except: pass
 
-def enregistrer_voix(chemin):
+
+def record_voice(path):
+    """Record ``RECORD_DURATION_S`` seconds of microphone input into ``path``."""
     try: speaker.end()
     except: pass
     mic = globals().get("Mic") or globals().get("mic")
     if mic is None:
         try: import mic
         except: pass
-    try: mic.record2file(DUREE_ENREGISTREMENT_S, chemin)
+    try: mic.record2file(RECORD_DURATION_S, path)
     except Exception as e: print("[voice] record error", e)
 
-def jouer_wav(chemin):
+
+def play_wav(path):
+    """Play a WAV file from flash at full volume."""
     utime.sleep_ms(500)
     try: speaker.begin()
     except: pass
-    preparer_audio()
-    try: speaker.playWAV(chemin, volume=100)
+    prepare_audio()
+    try: speaker.playWAV(path, volume=100)
     except Exception as e: print("[voice] playWAV error", e)
 
+
 def _urlencode(s):
-    # Encodage pourcent CORRECT en UTF-8 : on encode chaque OCTET de la
-    # representation UTF-8 (et pas le code-point). L'ancienne version cassait
-    # les accents (e, e, a, c...) -> le serveur recevait du texte corrompu et
-    # la synthese vocale lisait du charabia. "HEX" pour mapper octet -> 2 hex.
+    """Proper UTF-8 percent-encoding of a URL query value.
+
+    Encodes each BYTE of the UTF-8 representation (not the code point) so that
+    accented characters survive the round-trip through the server.
+    """
     HEX = "0123456789ABCDEF"
     out = ""
     for b in s.encode("utf-8"):
+        # Unreserved characters per RFC 3986: A-Z a-z 0-9 - . _ ~
         if (48 <= b <= 57) or (65 <= b <= 90) or (97 <= b <= 122) or b in (45, 46, 95, 126):
-            out += chr(b)            # caracteres non reserves : A-Z a-z 0-9 - . _ ~
+            out += chr(b)
         else:
             out += "%" + HEX[b >> 4] + HEX[b & 15]
     return out
 
+
 def voice_speak(text, lang=None):
+    """Stream a TTS-synthesized WAV from the middleware and play it.
+
+    The WAV is downloaded in 512-byte chunks to keep RAM usage low (the M5
+    only has ~100 KB free heap), then played via ``play_wav`` so the volume
+    is forced to 100.
+    """
     if not text: return
     try:
         import gc; gc.collect()
         url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(text[:150])
         if lang:
             url += "&lang=" + lang
-            
+
         import urequests
         r = urequests.get(url)
         ok = (r.status_code == 200)
         if ok:
-            with open(FICHIER_REPONSE, "wb") as f2:
+            with open(RESPONSE_FILE, "wb") as f2:
                 while True:
                     chunk = r.raw.read(512)
                     if not chunk: break
                     f2.write(chunk)
         r.close()
-        
+
         if ok:
-            jouer_wav(FICHIER_REPONSE)
+            play_wav(RESPONSE_FILE)
     except Exception as e:
         print("[voice] TTS Error", e)
 
+
 def voice_listen_flow(data_dict):
+    """Run the full press-to-talk cycle: record -> /listen -> show -> play."""
     global page
     page = 4
     data_dict["voice_state"] = "listening"
     screen_render(page, data_dict, False, True)
 
-    log("[C] enregistrement...")
-    enregistrer_voix(FICHIER_VOIX)
+    print("[C] recording...")
+    record_voice(VOICE_FILE)
 
     data_dict["voice_state"] = "thinking"
     screen_render(page, data_dict, False, True)
 
     try:
         import gc; gc.collect()
-        with open(FICHIER_VOIX, "rb") as f: audio_data = f.read()
-        log("[C] WAV=" + str(len(audio_data)) + " octets -> /listen")
+        with open(VOICE_FILE, "rb") as f: audio_data = f.read()
+        print("[C] WAV=" + str(len(audio_data)) + " bytes -> /listen")
         r = urequests.post(MIDDLEWARE_URL + "/api/voice/listen", data=audio_data, headers={"Content-Type": "audio/wav"})
-        log("[LISTEN] status=" + str(r.status_code))
+        print("[LISTEN] status=" + str(r.status_code))
         resp = ujson.loads(r.content)
         r.close()
 
@@ -1050,80 +1048,48 @@ def voice_listen_flow(data_dict):
             data_dict["voice_state"] = "done"
             data_dict["transcript"] = resp.get("transcript", "")
             data_dict["answer"] = answer
-            log("[STT] " + str(resp.get("transcript", "")))
-            log("[LLM] " + str(answer)[:120])
+            print("[STT] " + str(resp.get("transcript", "")))
+            print("[LLM] " + str(answer)[:120])
             screen_render(page, data_dict, False, True)
 
-            # Téléchargement en CHUNKS (512 o) vers /flash, puis lecture via
-            # jouer_wav (playWAV volume=100 -> son FORT).
-            # Pourquoi ce compromis :
-            #  - r2.content chargeait TOUT le WAV en RAM -> saturation (latence 2 min).
-            #  - playCloudWAV (streaming) règle la RAM MAIS joue au volume par défaut
-            #    (trop faible : sur ce firmware setVolume() est inopérant, seul le
-            #     parametre volume= de playWAV agit).
-            #  -> On lit donc le WAV par petits morceaux (RAM minimale) vers le
-            #     fichier, puis on le joue avec volume=100. Rapide ET fort.
+            # Stream the answer WAV to flash in 512-byte chunks (keeps RAM low),
+            # then play it via play_wav so the volume is forced to 100.
             try:
                 gc.collect()
                 url = MIDDLEWARE_URL + "/api/voice/tts.wav?text=" + _urlencode(answer[:200])
                 r2 = urequests.get(url)
                 ok = (r2.status_code == 200)
                 if ok:
-                    recu = 0
-                    with open(FICHIER_REPONSE, "wb") as f2:
+                    received = 0
+                    with open(RESPONSE_FILE, "wb") as f2:
                         while True:
                             chunk = r2.raw.read(512)
                             if not chunk:
                                 break
                             f2.write(chunk)
-                            recu += len(chunk)
-                    log("[TTS] recu " + str(recu) + " octets (chunks)")
+                            received += len(chunk)
+                    print("[TTS] received " + str(received) + " bytes (chunks)")
                 r2.close()
                 if ok:
-                    jouer_wav(FICHIER_REPONSE)         # playWAV(volume=100) -> son fort
+                    play_wav(RESPONSE_FILE)
                 else:
-                    log("[TTS] HTTP " + str(r2.status_code))
+                    print("[TTS] HTTP " + str(r2.status_code))
                     voice_speak(answer)
             except Exception as e:
-                log("[TTS] ERREUR DL: " + str(e))
+                print("[TTS] DL ERROR: " + str(e))
                 voice_speak(answer)
         else:
             data_dict["voice_state"] = "done"
-            data_dict["transcript"] = "Serveur Erreur"
-            data_dict["answer"] = resp.get("error", "Erreur inconnue")
-            log("[LISTEN] erreur serveur: " + str(resp.get("error", "?")))
+            data_dict["transcript"] = "Server Error"
+            data_dict["answer"] = resp.get("error", "Unknown error")
+            print("[LISTEN] server error: " + str(resp.get("error", "?")))
             screen_render(page, data_dict, False, True)
     except Exception as e:
         data_dict["voice_state"] = "done"
-        data_dict["transcript"] = "Reseau Erreur"
+        data_dict["transcript"] = "Network Error"
         data_dict["answer"] = str(e)[:30]
-        log("[C] EXCEPTION: " + str(e))
+        print("[C] EXCEPTION: " + str(e))
         screen_render(page, data_dict, False, True)
-
-
-def show_debug_log():
-    """Affiche les dernieres lignes de /flash/debug.log a l'ecran (appui LONG sur A).
-    Le seul moyen de relire les erreurs sur le M5 sans cable USB."""
-    try:
-        with open(FICHIER_LOG) as f:
-            contenu = f.read()
-    except Exception as e:
-        contenu = "Pas de journal: " + str(e)
-    lcd.clear(COL_BG)
-    lcd.font(FONT_TINY)
-    # Decoupe en lignes de 52 caracteres max (pour ne pas deborder de l'ecran).
-    lignes = []
-    for brute in contenu.split("\n"):
-        if brute == "":
-            lignes.append("")
-        else:
-            for i in range(0, len(brute), 52):
-                lignes.append(brute[i:i + 52])
-    y = 4
-    for ligne in lignes[-18:]:        # les 18 dernieres lignes qui tiennent a l'ecran
-        lcd.print(ligne, 4, y, COL_WHITE)
-        y += 13
-    utime.sleep(10)                   # laisse 10 s pour lire / prendre une photo
 
 
 # =============================================================================
@@ -1131,7 +1097,7 @@ def show_debug_log():
 # =============================================================================
 
 def device_poll_sync():
-    """Récupère la file d'attente des commandes depuis la Remote Streamlit."""
+    """Retrieve the pending command queue from the dashboard."""
     try:
         resp = _cloud_get("/api/device/sync")
         if resp and resp.get("status") == "ok":
@@ -1139,36 +1105,6 @@ def device_poll_sync():
     except Exception as e:
         print("[poll] error:", e)
     return []
-
-
-def build_announcement(data, forecast):
-    """Build a TTS announcement for when motion is detected."""
-    parts = []
-    weather = data.get("weather", {}).get("current", {})
-    if weather:
-        parts.append("Outside it's {} degrees and {}.".format(
-            int(weather.get("temp", 0)),
-            weather.get("description", "").lower() or "variable",
-        ))
-    temp = data.get("temperature")
-    humi = data.get("humidity")
-    if temp is not None:
-        parts.append("Inside: {:.1f} degrees.".format(temp))
-    if humi is not None:
-        parts.append("Humidity: {:.0f} percent.".format(humi))
-    if humi is not None and humi < ALERT_HUMIDITY_MIN:
-        parts.append(
-            "Warning: indoor humidity is very low at {:.0f} percent. "
-            "Consider using a humidifier.".format(humi)
-        )
-    aq = data.get("aq_label", "Good")
-    if aq in ("Poor", "Hazardous"):
-        parts.append("Air quality is {}. Consider ventilating.".format(aq.lower()))
-    if is_morning() and is_rain_forecast(forecast):
-        parts.append("Rain is expected today. Don't forget your umbrella!")
-    if weather.get("condition") == "Thunderstorm":
-        parts.append("There is a thunderstorm outside. Stay safe!")
-    return " ".join(parts) if parts else "Everything looks good. Have a great day!"
 
 
 # =============================================================================
@@ -1179,6 +1115,7 @@ _CREDS_FILE = "wifi_creds.json"
 
 
 def _wifi_get_history():
+    """Return the list of saved networks (most recent first)."""
     try:
         with open(_CREDS_FILE) as f:
             d = ujson.load(f)
@@ -1192,13 +1129,15 @@ def _wifi_get_history():
 
 
 def _wifi_load_creds():
+    """Return the most recently used (ssid, password). Empty strings if none."""
     history = _wifi_get_history()
     if history:
         return history[0]["ssid"], history[0].get("password", "")
-    return WIFI_SSID, WIFI_PASSWORD
+    return "", ""
 
 
 def _wifi_save_creds(ssid, password):
+    """Persist a successfully-connected network at the top of the history."""
     history = _wifi_get_history()
     history = [n for n in history if n.get("ssid") != ssid]
     history.insert(0, {"ssid": ssid, "password": password})
@@ -1220,9 +1159,12 @@ def wifi_current_ssid():
 
 
 def wifi_connect(ssid=None, password=None):
+    """Connect to ``ssid``/``password`` (falls back to the saved history)."""
     import network
     if ssid is None or password is None:
         ssid, password = _wifi_load_creds()
+    if not ssid:
+        return False
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     if wlan.isconnected() and wlan.config("essid") == ssid:
@@ -1240,7 +1182,7 @@ def wifi_connect(ssid=None, password=None):
 
 
 def wifi_cycle():
-    """Trigger UIFlow WiFi setup mode if connection fails."""
+    """Trigger the UIFlow WiFi setup mode if no saved network connects."""
     try:
         import wifiCfg
         wifiCfg.reconnect()
@@ -1249,6 +1191,7 @@ def wifi_cycle():
 
 
 def wifi_scan():
+    """Return the list of nearby networks (strongest signal first)."""
     import network
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
@@ -1272,12 +1215,13 @@ def wifi_scan():
 # =============================================================================
 
 def update_alerts(indoor):
+    """Return the list of active alert strings based on the latest reading."""
     alerts = []
     humi = indoor.get("humidity")
     tvoc = indoor.get("tvoc")
     eco2 = indoor.get("eco2")
     if humi is not None and humi < ALERT_HUMIDITY_MIN:
-        alerts.append("Humidity {:.0f}% – Too low!".format(humi))
+        alerts.append("Humidity {:.0f}% - Too low!".format(humi))
     if tvoc is not None and tvoc > ALERT_TVOC_MAX:
         alerts.append("Air quality POOR ({} ppb)".format(tvoc))
     if eco2 is not None and eco2 > ALERT_ECO2_MAX:
@@ -1291,6 +1235,7 @@ def update_alerts(indoor):
 
 def build_display_data(indoor, weather, history, time_now,
                        wifi_networks=None, wifi_selected=0):
+    """Aggregate all the pieces displayed on the screen into a single dict."""
     data = {}
     if indoor:
         data.update(indoor)
@@ -1301,14 +1246,12 @@ def build_display_data(indoor, weather, history, time_now,
     data["history"]       = history
     data["wifi_ssid"]     = wifi_current_ssid()
     data["wifi_history"]  = _wifi_get_history()
-    
-    # Check sensor health
+
+    # Coarse sensor-health flag.
     sensors_ok = True
     if indoor:
         if indoor.get("temperature") == 0 and indoor.get("humidity") == 0:
             sensors_ok = False
-        if indoor.get("tvoc") == 0 and indoor.get("eco2") == 400: # sgp30 often defaults to these
-            pass # might just be clean air, but we can assume ok if reading works
     else:
         sensors_ok = False
     data["sensors_ok"]    = sensors_ok
@@ -1316,18 +1259,13 @@ def build_display_data(indoor, weather, history, time_now,
     data["wifi_selected"] = wifi_selected
     return data
 
+
 def main():
-    # ── Init ────────────────────────────────────────────────────────────────
+    # ---- Init ---------------------------------------------------------------
     lcd.clear(COL_BG)
-    # Journal vierge a chaque demarrage (lisible via appui LONG sur A).
-    try:
-        with open(FICHIER_LOG, "w") as f:
-            f.write("=== DEBUG LOG ===\n")
-    except: pass
     sensors_init()
 
     page          = 0
-    home_primary  = "indoor"
     indoor        = {}
     weather       = {}
     history       = []
@@ -1342,8 +1280,8 @@ def main():
     last_display  = 0
     last_poll     = 0
 
-    # ── Boot sequence ────────────────────────────────────────────────────────
-    
+    # ---- Boot sequence ------------------------------------------------------
+
     screen_show_loading("Connecting WiFi...")
     try:
         import wifiCfg
@@ -1351,7 +1289,7 @@ def main():
     except:
         pass
 
-    # 0. Download UI assets (self-install)
+    # Download UI assets (self-install) if missing.
     screen_show_loading("Checking UI assets...")
     import os
     try:
@@ -1359,7 +1297,7 @@ def main():
     except:
         pass
     for ico in ['clear', 'partly', 'clouds', 'rain', 'storm', 'snow', 'robot']:
-        # Download 20x20 icons
+        # 20x20 icon
         ico_file = ico + ".jpg"
         path = 'res/' + ico + "_v2.jpg"
         try:
@@ -1374,8 +1312,8 @@ def main():
                         f.write(r.content)
                     r.close()
             except: pass
-            
-        # Download 40x40 icons (big)
+
+        # 40x40 icon (big)
         ico_big_file = ico + "_big.jpg"
         path_big = 'res/' + ico + "_big.jpg"
         try:
@@ -1406,36 +1344,26 @@ def main():
 
     history = cloud_get_history()
 
-    # Initial render
+    # Initial render.
     data = build_display_data(indoor, weather, history, ntp_now())
     screen_render(page, data)
 
-    # ── Main loop ────────────────────────────────────────────────────────────
-    
+    # ---- Main loop ----------------------------------------------------------
+
     STANDBY_TIMEOUT = 60
     last_interaction = utime.time()
     is_standby = False
     last_pir_state = 0
-    last_smart_welcome_time = 0   # Cooldown for motion announcements
-    a_press_start = 0     # instant (ticks_ms) du debut d'appui sur A (0 = relache)
+    last_smart_welcome_time = 0   # cooldown for the smart welcome announcement
 
     while True:
         now = utime.time()
 
-        # Buffered hardware buttons (catches presses even during HTTP blocks)
+        # Buffered hardware buttons (catches presses even during HTTP blocks).
         try:
-            # Bouton A : appui COURT = page precedente ; appui LONG (>=1.5s) = JOURNAL DEBUG
-            if btnA.isPressed():
-                if a_press_start == 0:
-                    a_press_start = utime.ticks_ms()
-            elif a_press_start != 0:
-                held = utime.ticks_diff(utime.ticks_ms(), a_press_start)
-                a_press_start = 0
+            if btnA.wasPressed():
                 last_interaction = now
-                if held >= 1500:
-                    show_debug_log()
-                else:
-                    page = (page - 1) % NUM_PAGES
+                page = (page - 1) % NUM_PAGES
                 screen_render(page, build_display_data(indoor, weather, history, ntp_now()), is_standby)
             elif btnC.wasPressed():
                 last_interaction = now
@@ -1446,12 +1374,12 @@ def main():
                 voice_listen_flow(build_display_data(indoor, weather, history, ntp_now()))
         except: pass
 
-        # Touch handling
+        # Touch handling.
         try:
             touch_active = touch.status()
         except:
             touch_active = False
-            
+
         if touch_active:
             last_interaction = now
             if is_standby:
@@ -1462,7 +1390,7 @@ def main():
                 continue
 
             tx, ty = touch.read()
-            # Top bar navigation
+            # Top-bar navigation.
             if ty < 35:
                 if tx < 80:
                     page = 0
@@ -1475,12 +1403,12 @@ def main():
                 data = build_display_data(indoor, weather, history, ntp_now())
                 screen_render(page, data, is_standby)
                 utime.sleep_ms(300)
-            
+
             elif ty >= 35 and ty <= 240:
-                # Handle touch in Settings Page to Switch WiFi and Brightness
+                # Touch handling on the Settings page: WiFi switcher + brightness.
                 if page == 3:
                     last_interaction = now
-                    # Brightness buttons
+                    # Brightness buttons.
                     if ty >= 190 and ty <= 225:
                         if tx >= 15 and tx <= 75:
                             set_screen_brightness(current_brightness - 20)
@@ -1488,8 +1416,8 @@ def main():
                             set_screen_brightness(current_brightness + 20)
                         utime.sleep_ms(300)
                         continue
-                    
-                    # WiFi selection
+
+                    # WiFi network selection.
                     wifi_hist = _wifi_get_history()
                     idx = (ty - 125) // 18
                     if 0 <= idx < min(len(wifi_hist), 3):
@@ -1508,7 +1436,7 @@ def main():
                         utime.sleep_ms(300)
                         continue
 
-            # M5Stack Core2 Virtual Buttons (Bottom bezel)
+            # Virtual buttons in the bottom bezel.
             elif ty > 240:
                 if tx < 106:      # Button A
                     page = (page - 1) % NUM_PAGES
@@ -1516,30 +1444,31 @@ def main():
                     page = (page + 1) % NUM_PAGES
                 else:             # Button B
                     voice_listen_flow(build_display_data(indoor, weather, history, ntp_now()))
-                
+
                 data = build_display_data(indoor, weather, history, ntp_now())
                 screen_render(page, data, is_standby)
                 utime.sleep_ms(300)
-                    
-            utime.sleep_ms(50) # debounce
 
-        # PIR wakeup (only on transition from 0 to 1 to avoid floating pin block)
+            utime.sleep_ms(50)  # debounce
+
+        # PIR wakeup (only on the 0 -> 1 transition to avoid floating-pin spam).
         current_pir = 0
         try:
             if _pir: current_pir = _pir.state
         except:
             pass
-            
+
         if current_pir == 1 and last_pir_state == 0:
             last_interaction = now
             if is_standby:
                 is_standby = False
                 set_screen_brightness(100)
                 screen_render(page, build_display_data(indoor, weather, history, ntp_now()), False, True)
-                
-                # Smart Welcome Voice Announcement with 10s cooldown for testing
+
+                # Smart-welcome announcement with a 10 s cooldown.
                 if now - last_smart_welcome_time > 10:
-                    preparer_audio()  # Allume l'amplificateur plus tôt pour éviter que le début de la phrase soit coupé
+                    # Turn the amplifier on early so the first syllable is not clipped.
+                    prepare_audio()
                     try:
                         import urequests
                         res = urequests.get(MIDDLEWARE_URL + "/api/voice/smart_welcome")
@@ -1553,16 +1482,16 @@ def main():
                     last_smart_welcome_time = utime.time()
         elif current_pir == 1:
             pass
-            
+
         last_pir_state = current_pir
 
-        # Standby logic
+        # Standby logic.
         if not is_standby and (now - last_interaction) > STANDBY_TIMEOUT:
             is_standby = True
-            set_screen_brightness(100)  # User requested brightness à fond
+            set_screen_brightness(100)
             screen_render(page, build_display_data(indoor, weather, history, ntp_now()), True, True)
 
-        # Read sensors
+        # Read sensors.
         if now - last_sensor >= SENSOR_READ_INTERVAL:
             reading = sensors_read()
             indoor.update(reading)
@@ -1570,13 +1499,13 @@ def main():
             screen_set_alerts(alerts)
             last_sensor = now
 
-        # Upload to cloud
+        # Upload to the cloud.
         if now - last_upload >= CLOUD_UPLOAD_INTERVAL:
             if indoor:
                 cloud_send(indoor)
             last_upload = now
 
-        # Refresh weather
+        # Refresh weather.
         if now - last_weather >= WEATHER_REFRESH_INTERVAL:
             w = weather_get()
             if w:
@@ -1585,14 +1514,14 @@ def main():
             if utime.localtime()[0] <= 2020:
                 ntp_sync(silent=True)
 
-        # Refresh display (meteo)
+        # Refresh display.
         if now - last_display >= (1 if is_standby else DISPLAY_TICK):
             time_now = ntp_now()
             data = build_display_data(indoor, weather, history, time_now)
             screen_render(page, data, is_standby, False)
             last_display = now
-            
-        # Poll dashboard commands every 5 seconds (reduces HTTP blocking to improve UI responsiveness)
+
+        # Poll dashboard commands every 5 s.
         if now - last_poll >= 5:
             cmds = device_poll_sync()
             for cmd in cmds:
@@ -1619,7 +1548,6 @@ def main():
                     set_screen_brightness(int(value))
                 elif action == "set_volume":
                     try:
-                        import machine
                         speaker.setVolume(int(value))
                     except: pass
                 elif action == "play_audio":
@@ -1632,6 +1560,7 @@ def main():
         import gc
         gc.collect()
         utime.sleep_ms(20)
+
 
 try:
     import machine

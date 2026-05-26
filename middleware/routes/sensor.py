@@ -22,7 +22,7 @@ def post_sensor():
     try:
         w = get_full_weather("Lausanne,CH")
         c = w.get("current", {})
-        # get_current() renvoie la clé "temp" (pas "temperature") -> bug corrigé.
+        # get_current() returns the "temp" key.
         data["outdoor_temp"] = c.get("temp")
         data["outdoor_humidity"] = c.get("humidity")
         data["outdoor_wind"] = c.get("wind_speed")
@@ -143,8 +143,8 @@ def get_sensor_history_weekly():
     weekly_bars = []
     days_names = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
-    # Données RÉELLES uniquement. Les jours sans mesure sont à 0 (le firmware
-    # affiche alors une barre minimale) — pas de données fabriquées.
+    # Real data only — days with no measurement are reported as 0 (the device
+    # then draws a minimal bar). Never fabricate values.
     for i in range(7):
         b = day_buckets[i]
         avg_in  = sum(b["in"])  / len(b["in"])  if b["in"]  else 0

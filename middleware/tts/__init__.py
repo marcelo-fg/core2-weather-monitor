@@ -1,12 +1,10 @@
 """
-Package "tts"
-=============
-Ce package regroupe la logique "cœur" du module Text-to-Speech :
+tts package — voice subsystem.
 
-- service.py        : appel à l'API Google Cloud Text-to-Speech (+ orchestration cache).
-- cache.py          : cache sur disque des fichiers WAV déjà générés.
-- announcements.py  : composition des annonces vocales + rate-limiting.
-
-L'objectif de ce découpage est la LISIBILITÉ : chaque fichier a une seule
-responsabilité claire, ce qui rend le code facile à expliquer et à défendre.
+Modules:
+- service.py       : Google Cloud Text-to-Speech client (synthesis + cache orchestration).
+- cache.py         : on-disk cache of already-synthesized WAV files.
+- stt.py           : Google Cloud Speech-to-Text client.
+- llm.py           : Google Gemini client (multi-model fallback + per-call timeout).
+- announcements.py : announcement templates and rate limiting.
 """

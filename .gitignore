@@ -1,12 +1,26 @@
-# ⚠️ Never commit these files — they contain real credentials
+# ===== Secrets — never commit =====
+# Device-side configuration (WiFi credentials, API keys)
 device/config.py
 device/wifi_creds.json
 
-# Environment variables (NEVER commit)
+# Environment variables
 .env
 *.env
 
-# Python
+# Google Cloud credentials
+*-service-account*.json
+credentials*.json
+application_default_credentials.json
+env-vars.yaml
+
+# ===== Runtime artifacts =====
+# TTS audio cache is written at runtime (Cloud Run uses /tmp anyway)
+middleware/static/audio/
+
+# ===== Local dev tooling =====
+.claude/
+
+# ===== Python =====
 __pycache__/
 *.pyc
 *.pyo
@@ -18,12 +32,9 @@ venv/
 env/
 test_env/
 
-# System
+# ===== System =====
 .DS_Store
 *.log
 
-# Google Cloud credentials
-*-service-account*.json
-credentials*.json
-env-vars.yaml
-application_default_credentials.json
+# ===== Archives =====
+*.zip

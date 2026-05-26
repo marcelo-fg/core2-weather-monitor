@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 
 OWM_BASE = "https://api.openweathermap.org/data/2.5"
 
-# Cache mémoire (TTL) : la météo change lentement. On évite ainsi de rappeler
-# OpenWeather à chaque requête vocale (qui appelle current + forecast), ce qui
-# réduit nettement la latence. 300 s = 5 min.
+# In-memory TTL cache. Weather changes slowly; caching the current and
+# forecast results avoids hitting OpenWeather on every voice request and
+# noticeably reduces end-to-end latency. 300 s = 5 minutes.
 _WEATHER_CACHE = {}
 _WEATHER_TTL = 300
 
@@ -44,7 +44,7 @@ def _get(endpoint: str, params: dict) -> dict | None:
 
 
 def get_current(location: str = None) -> dict | None:
-    """Return current weather for a location (mis en cache 5 min)."""
+    """Return current weather for a location (cached for 5 minutes)."""
     loc = location or DEFAULT_LOCATION
     cached = _cache_get(("current", loc))
     if cached is not None:
@@ -72,7 +72,7 @@ def get_current(location: str = None) -> dict | None:
 
 
 def get_forecast(location: str = None) -> dict:
-    """Return 5-day daily forecast and next 5 3-hour blocks (mis en cache 5 min)."""
+    """Return 5-day daily forecast and next 5 3-hour blocks (cached for 5 minutes)."""
     loc = location or DEFAULT_LOCATION
     cached = _cache_get(("forecast", loc))
     if cached is not None:

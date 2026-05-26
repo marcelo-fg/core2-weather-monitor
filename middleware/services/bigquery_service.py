@@ -11,10 +11,15 @@ logger = logging.getLogger(__name__)
 
 _client = None
 
-# Petit cache (TTL) de la dernière mesure : le M5 n'envoie une mesure que toutes
-# les ~5 min, donc inutile de requêter BigQuery à chaque requête vocale.
+# Small TTL cache of the most recent reading. The M5 uploads roughly every
+# 5 minutes, so re-querying BigQuery on every voice request is wasteful.
 _LATEST_CACHE = {"ts": 0.0, "value": None}
 _LATEST_TTL = 30
+
+# TTL cache of the aggregated history summary used by the voice assistant.
+# Historical aggregates change slowly, so a 5-minute window is plenty.
+_HISTORY_SUMMARY_CACHE = {"ts": 0.0, "value": None}
+_HISTORY_SUMMARY_TTL = 300
 
 
 def _get_client():
@@ -100,7 +105,7 @@ def insert_reading(reading: dict) -> bool:
 
 
 def get_latest_reading() -> dict | None:
-    """Return the most recent sensor reading (mis en cache 30 s)."""
+    """Return the most recent sensor reading (cached for 30 seconds)."""
     if (time.time() - _LATEST_CACHE["ts"]) < _LATEST_TTL:
         return _LATEST_CACHE["value"]
 
@@ -147,3 +152,75 @@ def get_history(hours: int = 24) -> list:
     except Exception as e:
         logger.error(f"BigQuery history query error: {e}")
         return []
+
+
+# Metrics reported in the history summary. ``decimals`` controls rounding for
+# the average; min/max are kept as integers for the inherently-integer ones.
+_HISTORY_METRICS = (
+    ("temperature", 1),
+    ("humidity",    0),
+    ("tvoc",        0),
+    ("eco2",        0),
+)
+
+
+def _summarize_rows(rows: list, include_peak_hours: bool = False) -> dict:
+    """Compute min/max/avg for each indoor metric over the given rows.
+
+    When ``include_peak_hours`` is True, also returns the hour-of-day strings
+    at which the indoor temperature reached its min and max in the window.
+    """
+    if not rows:
+        return {}
+    out = {"readings": len(rows)}
+    for key, decimals in _HISTORY_METRICS:
+        values = [r.get(key) for r in rows if r.get(key) is not None]
+        if not values:
+            continue
+        mn, mx, avg = min(values), max(values), sum(values) / len(values)
+        if decimals == 0:
+            out[key + "_min"] = int(mn)
+            out[key + "_max"] = int(mx)
+            out[key + "_avg"] = int(round(avg))
+        else:
+            out[key + "_min"] = round(mn, decimals)
+            out[key + "_max"] = round(mx, decimals)
+            out[key + "_avg"] = round(avg, decimals)
+    if include_peak_hours:
+        temp_rows = [r for r in rows
+                     if r.get("temperature") is not None and r.get("timestamp") is not None]
+        if temp_rows:
+            warm = max(temp_rows, key=lambda r: r["temperature"])
+            cool = min(temp_rows, key=lambda r: r["temperature"])
+            try:
+                out["warmest_at"] = warm["timestamp"].strftime("%H:%M")
+                out["coolest_at"] = cool["timestamp"].strftime("%H:%M")
+            except Exception:
+                pass
+    return out
+
+
+def get_history_summary() -> dict:
+    """Return aggregated indoor stats for the last 24 hours and last 7 days.
+
+    Used by the voice assistant to answer questions about past data.
+    Cached in memory for 5 minutes — aggregates change slowly.
+    """
+    if (time.time() - _HISTORY_SUMMARY_CACHE["ts"]) < _HISTORY_SUMMARY_TTL:
+        return _HISTORY_SUMMARY_CACHE["value"] or {}
+
+    summary = {}
+    try:
+        rows_24h = get_history(24)
+        if rows_24h:
+            summary["h24"] = _summarize_rows(rows_24h, include_peak_hours=True)
+        rows_7d = get_history(168)
+        if rows_7d:
+            summary["h168"] = _summarize_rows(rows_7d, include_peak_hours=False)
+    except Exception as e:
+        logger.error(f"BigQuery history summary error: {e}")
+        return {}
+
+    _HISTORY_SUMMARY_CACHE["ts"] = time.time()
+    _HISTORY_SUMMARY_CACHE["value"] = summary
+    return summary
