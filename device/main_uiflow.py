@@ -682,11 +682,17 @@ def _page_standby(data, full=True):
         lcd.print(time_str, lcd.CENTER, 95, COL_WHITE)
         
         icon = data.get("weather", {}).get("current", {}).get("condition", "Clear")
+        temp = data.get("weather", {}).get("current", {}).get("temp")
+        
         try:
             # 50x50 icon, center is at X=135 (320/2 - 25)
             lcd.image(135, 155, _weather_icon_path(icon, big=True))
         except:
             pass
+            
+        if temp is not None:
+            lcd.font(FONT_SMALL)
+            lcd.print("{:.1f}C".format(temp), 70, 165, COL_WHITE)
     else:
         # Only update the time area to prevent flickering the image/date
         lcd.rect(15, 95, 290, 50, COL_BG, COL_BG)
