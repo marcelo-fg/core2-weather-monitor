@@ -137,11 +137,11 @@ def ntp_sync():
     lcd.print("Syncing clock...", lcd.CENTER, 80, COL_CYAN)
 
     # ── Already synced? ───────────────────────────────────────────────────────
-    if utime.localtime()[0] > 2020:
-        lcd.font(FONT_TINY)
-        lcd.print("Clock already OK", lcd.CENTER, 110, COL_GREEN)
-        utime.sleep(1)
-        return True
+    # if utime.localtime()[0] > 2020:
+    #     lcd.font(FONT_TINY)
+    #     lcd.print("Clock already OK", lcd.CENTER, 110, COL_GREEN)
+    #     utime.sleep(1)
+    #     return True
 
     import network
     if not network.WLAN(network.STA_IF).isconnected():
@@ -150,9 +150,35 @@ def ntp_sync():
         utime.sleep(1)
         return False
 
+    # ── Method 0: Middleware /api/time ───────────────────────────────────────
+    lcd.font(FONT_TINY)
+    lcd.print("0) Middleware API...", lcd.CENTER, 95, COL_GRAY)
+    try:
+        r = urequests.get(MIDDLEWARE_URL + "/api/time")
+        data = ujson.loads(r.content)
+        r.close()
+        unix_t = data.get("unixtime", 0)
+        if unix_t > 1700000000:
+            mp_t = unix_t - 946684800
+            t = utime.localtime(mp_t)
+            try:
+                import machine
+                machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
+            except Exception:
+                from m5stack import rtc
+                rtc.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
+            utime.sleep_ms(300)
+            if utime.localtime()[0] > 2020:
+                lcd.print("Middleware API OK!", lcd.CENTER, 110, COL_GREEN)
+                utime.sleep(1)
+                return True
+        lcd.print("Middleware API bad data", lcd.CENTER, 110, COL_YELLOW)
+    except Exception as e:
+        lcd.print("Middleware err: " + str(e)[:20], lcd.CENTER, 110, COL_RED)
+
     # ── Method 1: UIFlow native ntp (targeted import, no API key issue) ───────
     lcd.font(FONT_TINY)
-    lcd.print("1) UIFlow NTP...", lcd.CENTER, 110, COL_GRAY)
+    lcd.print("1) UIFlow NTP...", lcd.CENTER, 125, COL_GRAY)
     try:
         from uiflow import ntp as _ntp
         _ntp.setTime('pool.ntp.org', 0)   # UTC offset = 0; we add it in ntp_now()
