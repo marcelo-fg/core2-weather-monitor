@@ -648,22 +648,11 @@ elif st.session_state.page == "remote":
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
         
-        # Audio / Text Input
+        # Text Input
         prompt = st.chat_input("Ask Orion anything about the station...")
-        audio_val = st.audio_input("Or speak to Orion...")
 
-        if prompt or audio_val:
+        if prompt:
             user_text = prompt
-            if audio_val and not prompt:
-                with st.spinner("Transcribing audio..."):
-                    res = post_stt_only(audio_val.getvalue())
-                    if res and res.get("text"):
-                        user_text = res["text"]
-                    else:
-                        st.error("Failed to transcribe audio.")
-                        user_text = None
-
-            if user_text:
                 st.session_state.chat_history.append({"role": "user", "content": user_text})
                 # Re-render new message
                 with chat_container:
